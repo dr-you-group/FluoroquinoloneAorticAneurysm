@@ -120,8 +120,13 @@ plotCovariateBalanceScatterPlot <- function(balance,
   return(plot)
 }
 
-plotPs <- function(ps, targetName, comparatorName,
-                   showEquiposeLabel = TRUE, equipoiseBounds = c(0.3,0.7),
+plotPs <- function(ps,
+                   targetName,
+                   comparatorName,
+                   targetColor,
+                   comparatorColor,
+                   showEquiposeLabel = TRUE,
+                   equipoiseBounds = c(0.3,0.7),
                    fileName = NULL) {
   psOrigin <- ps
   ps <- rbind(data.frame(x = ps$preferenceScore, y = ps$targetDensity, group = targetName),
@@ -181,6 +186,84 @@ plotPs <- function(ps, targetName, comparatorName,
                     dpi = 400)
   return(plot)
 }
+
+plotPs <- function(ps,
+                   targetName,
+                   comparatorName,
+                   targetColor,
+                   comparatorColor,
+                   showEquiposeLabel = TRUE,
+                   equipoiseBounds = c(0.3,0.7),
+                   fileName = NULL,
+                   targetColorR = 0.8,
+                   targetColorG = 0,
+                   targetColorB = 0,
+                   comparatorColorR = 0,
+                   comparatorColorG = 0,
+                   comparatorColorB = 0.8) {
+  psOrigin <- ps
+  ps <- rbind(data.frame(x = ps$preferenceScore, y = ps$targetDensity, group = targetName),
+              data.frame(x = ps$preferenceScore, y = ps$comparatorDensity, group = comparatorName))
+  ps$group <- factor(ps$group, levels = c(as.character(targetName), as.character(comparatorName)))
+  theme <- ggplot2::element_text(colour = "#000000", size = 12, margin = ggplot2::margin(0, 0.5, 0, 0.1, "cm"))
+  plot <- ggplot2::ggplot(ps,
+                          ggplot2::aes(x = x, y = y, color = group, group = group, fill = group)) +
+    ggplot2::geom_density(stat = "identity") +
+    # ggplot2::scale_fill_manual(values = c(rgb(0.8, 0, 0, alpha = 0.5),
+    #                                       rgb(0, 0, 0.8, alpha = 0.5))) +
+    # ggplot2::scale_color_manual(values = c(rgb(0.8, 0, 0, alpha = 0.5),
+    #                                        rgb(0, 0, 0.8, alpha = 0.5))) +
+    ggplot2::scale_fill_manual(values = c(rgb(targetColorR, targetColorG, targetColorB, alpha = 0.5),
+                                          rgb(comparatorColorR, comparatorColorG, comparatorColorB, alpha = 0.5))) +
+    ggplot2::scale_color_manual(values = c(rgb(targetColorR, targetColorG, targetColorB, alpha = 0.5),
+                                           rgb(comparatorColorR, comparatorColorG, comparatorColorB, alpha = 0.5))) +
+    ggplot2::scale_x_continuous("Preference score", limits = c(0, 1)) +
+    ggplot2::scale_y_continuous("Density") +
+    ggplot2::theme(legend.title = ggplot2::element_blank(),
+                   panel.grid.major = ggplot2::element_blank(),
+                   panel.grid.minor = ggplot2::element_blank(),
+                   legend.position = "top",
+                   legend.text = theme,
+                   axis.text = theme,
+                   axis.title = theme)
+  if (showEquiposeLabel) {
+    labelsLeft <- c()
+    labelsRight <- c()
+    if (showEquiposeLabel) {
+      equiIndex <- psOrigin$preferenceScore>=equipoiseBounds[1] & psOrigin$preferenceScore<=equipoiseBounds[2]
+      equipoise <- mean (sum(psOrigin$targetDensity[equiIndex]), sum(psOrigin$comparatorDensity[equiIndex]))/100
+      labelsRight <- c(labelsRight, sprintf("%2.1f%% is in equipoise",
+                                            equipoise * 100))
+    }
+    if (length(labelsLeft) > 0) {
+      dummy <- data.frame(text = paste(labelsLeft, collapse = "\n"))
+      plot <- plot + ggplot2::geom_label(x = 0, #y = max(d$y) * 1.24,
+                                         hjust = "left", vjust = "top", alpha = 0.8,
+                                         ggplot2::aes(label = text), data = dummy, size = 3.5)
+    }
+    if (length(labelsRight) > 0) {
+      dummy <- data.frame(text = paste(labelsRight, collapse = "\n"))
+      plot <- plot + ggplot2::annotate("label", x = 1, y = max(ps$y) * 1,
+                                       hjust = "right", vjust = "top",
+                                       alpha = 0.8,
+                                       label = labelsRight,
+                                       #ggplot2::aes(label = labelsRight),
+                                       #ggplot2::aes(label = text), data = dummy,
+                                       size = 3.5)
+      # plot <- plot + ggplot2::geom_label(x = 1, y = max(ps$y) * 1.24,
+      #                                    hjust = "right", vjust = "top",
+      #                                    alpha = 0.8,
+      #                                    ggplot2::aes(label = labelsRight),
+      #                                    ggplot2::aes(label = text), data = dummy,
+      #                                    size = 3.5)
+    }
+  }
+  if (!is.null(fileName))
+    ggplot2::ggsave(fileName, plot, width = 5, height = 3.5,
+                    dpi = 400)
+  return(plot)
+}
+
 
 returnCamelDf <- function(targetTable, andromedaObject){
   sql <- "SELECT * FROM @target_table"
