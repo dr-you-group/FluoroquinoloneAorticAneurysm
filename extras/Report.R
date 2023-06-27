@@ -17,7 +17,10 @@
 
 library(dplyr)
 library(Andromeda)
+library(ggplot2)
+library(ggsci)
 # install.packages("jsonlite")
+# install.packages("ggplot2")
 
 Sys.setenv(DATABASECONNECTOR_JAR_FOLDER="/home/rstudio/jdbcDrivers")
 Sys.setenv(FluoroquinoloneAorticAneurysm_output_folder="/home/rstudio/output/FluoroquinoloneAorticAneurysm_output_folder")
@@ -160,7 +163,6 @@ dbs <- sosPullTable(connection = connection,
                     targetTable = "database_meta_data",
                     limit = 0)
 dbTidy <- dbs %>% select(cdmSourceName, cdmSourceAbbreviation, databaseId)
-dbTidy
 
 # Find Primary analysis
 returnCamelDf (targetTable = "cm_analysis",
@@ -249,5 +251,116 @@ for(i in seq(nrow(tcdList))){
          comparatorColorR = comparatorColorR,
          comparatorColorG = comparatorColorG,
          comparatorColorB = comparatorColorB
-         )
+  )
+}
+
+####Survival analysis####
+returnCamelDf (targetTable = "cm_kaplan_meier_dist",
+               andromedaObject = cmResultSuite)
+
+returnCamelDf (targetTable = "cm_result",
+               andromedaObject = cmResultSuite)
+
+#Filter resluts for survival plots
+resultListForSurvival <- resultList %>%
+  filter(isPrimaryAnalysis == 1) %>%
+  filter(isPrimaryTco == 1) %>%
+  filter(unblind == 1) #only results passing the diagnostics
+
+yLimUpperBound =
+  1- kaplanMeierDist %>%
+  filter(analysisId %in% unique(resultListForSurvival$analysisId)) %>%
+  filter(outcomeId %in% unique(resultListForSurvival$outcomeId)) %>%
+  summarise(yLimUpperBound = min(targetSurvivalLb, comparatorSurvivalLb))
+yLimUpperBound = round(yLimUpperBound*1.3, digits = 3)
+
+for (i in seq(nrow(resultListForSurvival))){
+
+  outcomeId = resultListForSurvival$outcomeId[i]
+  outcomeName = resultListForSurvival$outcomeAbbreviation[i]
+  analysisId = resultListForSurvival$analysisId[i]
+  targetId = resultListForSurvival$targetId[i]
+  comparatorId = resultListForSurvival$comparatorId[i]
+  outcomeId = resultListForSurvival$outcomeId[i]
+  targetName = resultListForSurvival$targetAbbreviation[i]
+  comparatorName = resultListForSurvival$comparatorAbbreviation[i]
+  databaseId <- resultListForSurvival$databaseId[i]
+  databaseName <- resultListForSurvival$cdmSourceAbbreviation[i]
+
+  targetColorR <- resultListForSurvival$targetColorR[i]
+  targetColorG <- resultListForSurvival$targetColorG[i]
+  targetColorB <- resultListForSurvival$targetColorB[i]
+  comparatorColorR <- resultListForSurvival$comparatorColorR[i]
+  comparatorColorG <- resultListForSurvival$comparatorColorG[i]
+  comparatorColorB <- resultListForSurvival$comparatorColorB[i]
+
+  kaplanMeier <- kaplanMeierDist[kaplanMeierDist$databaseId==databaseId&
+                                   kaplanMeierDist$analysisId==analysisId&
+                                   kaplanMeierDist$outcomeId==outcomeId&
+                                   kaplanMeierDist$targetId == targetId&
+                                   kaplanMeierDist$comparatorId == comparatorId
+                                 ,]
+  if(nrow(kaplanMeier)==0) next
+  kpResult <- result[result$databaseId==databaseId&
+                       result$analysisId==analysisId&
+                       result$outcomeId==outcomeId&
+                       result$targetId == targetId&
+                       result$comparatorId == comparatorId
+                     ,]
+
+  kaplanMeier$targetSurvival <- 1-kaplanMeier$targetSurvival
+  kaplanMeier$targetSurvivalLb <-1-kaplanMeier$targetSurvivalLb
+  kaplanMeier$targetSurvivalUb <-1-kaplanMeier$targetSurvivalUb
+  kaplanMeier$comparatorSurvival <-1-kaplanMeier$comparatorSurvival
+  kaplanMeier$comparatorSurvivalLb <-1-kaplanMeier$comparatorSurvivalLb
+  kaplanMeier$comparatorSurvivalUb <-1-kaplanMeier$comparatorSurvivalUb
+  if(is.na(unique(kpResult$p))) next
+  if(length(unique(kpResult$p))>1) next
+
+  if(unique(kpResult$p)<0.001){
+    pValue =  sprintf("italic(P) < 0.001")
+    if (journalTheme=="jama") pValue = sprintf("italic(P)<.001")
+    pValue = sprintf("italic(P)<%s",".001")
+  }else {
+    #if (journalTheme=="jama") pNum <- sub("^(-?)0.", "\\1.", sprintf("%.3f",unique(kpResult$p)))
+    pValue =  sprintf("italic(P)==%#.3f",
+                      unique(kpResult$p))
+
+  }
+
+
+  p <-plotKaplanMeier(kaplanMeier,
+                      targetName,
+                      comparatorName,
+                      ylims = c(0,0.003),#c(0,round(max(kaplanMeier$comparatorSurvivalUb,kaplanMeier$targetSurvivalUb),2)+0.02),
+                      xBreaks = NULL,#seq(from = 0,to = 2000, by = 250),#c(0,100,200,300),
+                      targetColorR = targetColorR,
+                      targetColorG = targetColorG,
+                      targetColorB = targetColorB,
+                      comparatorColorR = comparatorColorR,
+                      comparatorColorG = comparatorColorG,
+                      comparatorColorB = comparatorColorB,
+                      pValue = pValue,
+                      title = sprintf("%s vs %s for %s in %s ", targetName, comparatorName, outcomeName, databaseName))
+
+  if(!file.exists(file.path(resultFolder,"kmplot"))) dir.create(file.path(resultFolder,"kmplot"))
+  ggplot2::ggsave(file.path(resultFolder,"kmplot",sprintf("km_plot_%s_t%d_c%d_o%d_a%d.eps",
+                                                          databaseId,
+                                                          targetId,
+                                                          comparatorId,
+                                                          outcomeId,
+                                                          analysisId)), p, device = "eps", width = 16, height = 12, units = "cm", dpi = 400)
+  ggplot2::ggsave(file.path(resultFolder,"kmplot",sprintf("km_plot_%s_t%d_c%d_o%d_a%d.pdf",
+                                                          databaseId,
+                                                          targetId,
+                                                          comparatorId,
+                                                          outcomeId,
+                                                          analysisId)), p, device = "pdf", width = 16, height = 12, units = "cm", dpi = 400)
+  ggplot2::ggsave(file.path(resultFolder,"kmplot",sprintf("km_plot_%s_t%d_c%d_o%d_a%d.tiff",
+                                                          databaseId,
+                                                          targetId,
+                                                          comparatorId,
+                                                          outcomeId,
+                                                          analysisId)), p, device = "tiff", width = 16, height = 12, units = "cm", dpi = 400)
+  #}
 }
