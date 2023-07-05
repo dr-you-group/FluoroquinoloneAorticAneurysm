@@ -22,6 +22,10 @@ library(ggsci)
 # install.packages("jsonlite")
 # install.packages("ggplot2")
 
+# To install EvidenceSynthesis
+# system("sudo apt install cmake")
+# devtools::install_github("ohdsi/EvidenceSynthesis")
+
 Sys.setenv(DATABASECONNECTOR_JAR_FOLDER="/home/rstudio/jdbcDrivers")
 Sys.setenv(FluoroquinoloneAorticAneurysm_output_folder="/home/rstudio/output/FluoroquinoloneAorticAneurysm_output_folder")
 Sys.setenv(FluoroquinoloneAorticAneurysm_temp_folder="/home/rstudio/temp")
@@ -119,6 +123,12 @@ cohortDefinition <- sosPullTable(connection = connection,
                                  resultsSchema = resultsSchema,
                                  targetTable = "cg_cohort_definition", #"cd_cohort"
                                  limit = 0)
+
+db <- sosPullTable(connection = connection,
+                   resultsSchema = resultsSchema,
+                   targetTable = "database_meta_data", #"cd_cohort"
+                   limit = 0)
+
 cohortTidy <- cohortDefinition %>%
   select(cohortDefinitionId, cohortName)
 
@@ -258,9 +268,6 @@ for(i in seq(nrow(tcdList))){
 returnCamelDf (targetTable = "cm_kaplan_meier_dist",
                andromedaObject = cmResultSuite)
 
-returnCamelDf (targetTable = "cm_result",
-               andromedaObject = cmResultSuite)
-
 #Filter resluts for survival plots
 resultListForSurvival <- resultList %>%
   filter(isPrimaryAnalysis == 1) %>%
@@ -276,14 +283,13 @@ yLimUpperBound = round(yLimUpperBound*1.3, digits = 3)
 
 for (i in seq(nrow(resultListForSurvival))){
 
-  outcomeId = resultListForSurvival$outcomeId[i]
-  outcomeName = resultListForSurvival$outcomeAbbreviation[i]
   analysisId = resultListForSurvival$analysisId[i]
   targetId = resultListForSurvival$targetId[i]
   comparatorId = resultListForSurvival$comparatorId[i]
-  outcomeId = resultListForSurvival$outcomeId[i]
   targetName = resultListForSurvival$targetAbbreviation[i]
   comparatorName = resultListForSurvival$comparatorAbbreviation[i]
+  outcomeId = resultListForSurvival$outcomeId[i]
+  outcomeName = resultListForSurvival$outcomeAbbreviation[i]
   databaseId <- resultListForSurvival$databaseId[i]
   databaseName <- resultListForSurvival$cdmSourceAbbreviation[i]
 
@@ -363,4 +369,98 @@ for (i in seq(nrow(resultListForSurvival))){
                                                           outcomeId,
                                                           analysisId)), p, device = "tiff", width = 16, height = 12, units = "cm", dpi = 400)
   #}
+}
+
+####Meta-analysis####
+returnCamelDf (targetTable = "cm_likelihood_profile",
+               andromedaObject = cmResultSuite)
+
+# returnCamelDf (targetTable = "cm_result",
+#                andromedaObject = cmResultSuite)
+
+listPrimaryAll <- resultList %>%
+  filter(isPrimaryAnalysis == 1) %>%
+  filter(isPrimaryTco == 1)
+
+analysisPrimaryAll <- listPrimaryAll %>%
+  select(targetId, comparatorId, outcomeId, analysisId,
+         targetAbbreviation, comparatorAbbreviation, outcomeAbbreviation) %>%
+  unique()
+
+for (i in seq(nrow(analysisPrimaryAll))){
+
+  analysisId = analysisPrimaryAll$analysisId[i]
+  targetId = analysisPrimaryAll$targetId[i]
+  comparatorId = analysisPrimaryAll$comparatorId[i]
+  outcomeId = analysisPrimaryAll$outcomeId[i]
+  targetName = analysisPrimaryAll$targetAbbreviation[i]
+  comparatorName = analysisPrimaryAll$comparatorAbbreviation[i]
+  outcomeName = analysisPrimaryAll$outcomeAbbreviation[i]
+
+  sampleLP <- likelihoodProfile %>% filter(targetId == !!targetId,
+                                           comparatorId == !!comparatorId,
+                                           outcomeId == !!outcomeId,
+                                           analysisId == !!analysisId
+  )
+  approx <- sampleLP %>% select("logRr", "logLikelihood", "databaseId")
+  colnames(approx)[1:2] <- c("point", "value")
+  approximations <- splitTable(approx, 'databaseId')
+  estimate <- EvidenceSynthesis::computeBayesianMetaAnalysis(approximations)
+
+  if(!file.exists(file.path(resultFolder,"meta"))) dir.create(file.path(resultFolder,"meta"))
+
+  EvidenceSynthesis::plotMetaAnalysisForest(
+    data = approximations,
+    labels = dbs$cdmSourceAbbreviation[match(names(approximations), dbs$databaseId)],
+    estimate = estimate,
+    xLabel = "HR",
+    summaryLabel = sprintf("Summary\n(%s vs %s)", targetName, comparatorName),
+    showLikelihood = TRUE,
+    fileName  = file.path(resultFolder, "meta", sprintf("t%sc%so%sa%s_all.png", targetName, comparatorName, outcomeId, analysisId))
+  )
+}
+
+#primary and those passing the diagnostics
+for (i in seq(analysisPrimaryAll)){
+
+  analysisId = analysisPrimaryAll$analysisId[i]
+  targetId = analysisPrimaryAll$targetId[i]
+  comparatorId = analysisPrimaryAll$comparatorId[i]
+  outcomeId = analysisPrimaryAll$outcomeId[i]
+  targetName = analysisPrimaryAll$targetAbbreviation[i]
+  comparatorName = analysisPrimaryAll$comparatorAbbreviation[i]
+  outcomeName = analysisPrimaryAll$outcomeAbbreviation[i]
+
+  databaseIds <- resultList %>%
+    filter(targetId == !!targetId,
+           comparatorId == !!comparatorId,
+           outcomeId == !!outcomeId,
+           analysisId == !!analysisId) %>%
+    filter(unblind == 1) %>%
+    pull(databaseId)
+
+  sampleLP <- likelihoodProfile %>%
+    filter(targetId == !!targetId,
+           comparatorId == !!comparatorId,
+           outcomeId == !!outcomeId,
+           analysisId == !!analysisId
+    ) %>%
+    filter (databaseId %in% !!databaseIds) #only those passing diagnostics
+
+  approx <- sampleLP %>% select("logRr", "logLikelihood", "databaseId")
+  colnames(approx)[1:2] <- c("point", "value")
+  approximations <- splitTable(approx, 'databaseId')
+  estimate <- EvidenceSynthesis::computeBayesianMetaAnalysis(approximations)
+
+  if(!file.exists(file.path(resultFolder,"meta"))) dir.create(file.path(resultFolder,"meta"))
+
+  EvidenceSynthesis::plotMetaAnalysisForest(
+    data = approximations,
+    labels = dbs$cdmSourceAbbreviation[match(names(approximations), dbs$databaseId)],
+    estimate = estimate,
+    xLabel = "Hazard Ratio",
+    summaryLabel = sprintf("Summary\n(%s vs %s)", targetName, comparatorName),
+    showLikelihood = TRUE,
+    fileName  = file.path(resultFolder, "meta", sprintf("t%sc%so%sa%s_passing_diag.png", targetName, comparatorName, outcomeId, analysisId))
+  )
 }

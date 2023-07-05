@@ -402,3 +402,9 @@ plotKaplanMeier <- function(kaplanMeier,
 
   return(plot)
 }
+
+#split table to list by column group
+# split_tibble <- function(tibble, col = 'col') tibble %>% split(., .[, col])
+splitTable <- function(table, column = 'col') {
+  table %>% split(., .[,column]) %>% lapply(., function(x) x[,setdiff(names(x),column)])
+}
