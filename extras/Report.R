@@ -31,6 +31,8 @@ Sys.setenv(FluoroquinoloneAorticAneurysm_output_folder="/home/rstudio/output/Flu
 Sys.setenv(FluoroquinoloneAorticAneurysm_temp_folder="/home/rstudio/temp")
 resultFolder <- Sys.getenv("FluoroquinoloneAorticAneurysm_output_folder")
 tempFolder <- Sys.getenv("FluoroquinoloneAorticAneurysm_temp_folder")
+resultFolder <- "/home/rstudio/output/FluoroquinoloneAorticAneurysm_output_folder"
+tempFolder <- "/home/rstudio/temp"
 
 # required packages
 # "SqlRender"
@@ -114,6 +116,7 @@ cmTableNames
 # }
 # Andromeda::saveAndromeda(cmResultSuite, file.path(tempFolder, "cm_result_suite"))
 cmResultSuite <- Andromeda::loadAndromeda(file.path(tempFolder, "cm_result_suite"))
+# Andromeda::close(cmResultSuite)
 
 ############################
 ####TCO, Analysis, DB list####
@@ -173,6 +176,21 @@ dbs <- sosPullTable(connection = connection,
                     targetTable = "database_meta_data",
                     limit = 0)
 dbTidy <- dbs %>% select(cdmSourceName, cdmSourceAbbreviation, databaseId)
+dbTidy$cdmSourceAbbreviation <- c("JMDC(JP)", "IBM MDCD(US)", "AUSOM(KR)", "NHIS-NSC(KR)", "Optum DOD(US)", "Optum EHR(US)", "IBM CCAE(US)", "PharMetrics(US)" ,"TMUDB(TW)",
+                                  "VA(US)", "CUMC(US)", "Japan Claims(JP)", "LPDAU(AU)", "LPD Italy(IT)", "German DA(DE)", "LPD Belgium(BE)", "Yonsei(KR)"    )
+
+
+# results
+cmAttrition <- sosPullTable(connection = connection,
+                            resultsSchema = resultsSchema,
+                            targetTable = "cm_attrition",
+                            limit = 0)
+
+cmAttrition %>% filter(databaseId %in% c(720217577, -1608353505,-1230918510, 597953468)) %>% filter(subjects != 0)
+cmAttrition %>% filter(databaseId %in% c(720217577))
+cmAttrition %>% filter(databaseId %in% c(-1608353505))
+cmAttrition %>% filter(databaseId %in% c(-1230918510))
+cmAttrition %>% filter(databaseId %in% c(597953468))
 
 # Find Primary analysis
 returnCamelDf (targetTable = "cm_analysis",
@@ -203,6 +221,95 @@ resultList <- diagnosticsSummary %>%
   left_join(tcoTidy,
             by = c("targetId", "comparatorId", "outcomeId")
   )
+
+####Balance plot####
+returnCamelDf (targetTable = "cm_shared_covariate_balance",
+               andromedaObject = cmResultSuite)
+returnCamelDf (targetTable = "cm_covariate_balance",
+               andromedaObject = cmResultSuite)
+names(cmResultSuite)
+
+#Filter results for survival plots
+resultListForBalance <- resultList %>%
+  filter(isPrimaryAnalysis == 1) %>%
+  filter(isPrimaryTco == 1)
+
+for(i in seq(nrow(resultListForBalance))){
+  if(!resultListForBalance$isPrimaryAnalysis[i]) next #Only plot PS distribution for primary analysis
+
+  databaseId <- resultListForBalance[i,]$databaseId
+  targetId <- resultListForBalance[i,]$targetId
+  comparatorId <- resultListForBalance[i,]$comparatorId
+  analysisId <- resultListForBalance[i,]$analysisId
+  outcomeId = resultListForBalance$outcomeId[i]
+  # targetColorR <- tcdList[i,]$targetColorR
+  # targetColorG <- tcdList[i,]$targetColorG
+  # targetColorB <- tcdList[i,]$targetColorB
+  # comparatorColorR <- tcdList[i,]$comparatorColorR
+  # comparatorColorG <- tcdList[i,]$comparatorColorG
+  # comparatorColorB <- tcdList[i,]$comparatorColorB
+
+  balance = sharedCovariateBalance %>% filter(databaseId == !!databaseId,
+                                        targetId == !!targetId,
+                                        comparatorId == !!comparatorId,
+                                        analysisId == !!analysisId)
+  balance$absBeforeMatchingStdDiff <- abs(balance$stdDiffBefore)
+  balance$absAfterMatchingStdDiff <- abs(balance$stdDiffAfter)
+
+  targetName <- resultListForBalance[i,]$targetAbbreviation
+  comparatorName <- resultListForBalance[i,]$comparatorAbbreviation
+  dbName <- resultListForBalance[i,]$cdmSourceAbbreviation
+
+  if(nrow(balance)==0) next
+
+  balancePlot <- plotCovariateBalanceScatterPlot(balance,
+                                                 beforeLabel = "Before matching",
+                                                 afterLabel = "After matching",
+                                                 limits = c(0,0.4))
+
+
+
+  balancePlot<-balancePlot+ annotate("label", label = sprintf(" Number of covariates: %s\nAfter matching max(absolute):%s",
+                                                              format(nrow(balance), big.mark=",", scientific=FALSE),
+                                                              format(round(max(balance$absAfterMatchingStdDiff),2),nsmall=2)),
+                                     x = -Inf, y = Inf, hjust=-0.2,vjust=2, color = "black");balancePlot
+  balancePlot <- balancePlot + ggtitle(sprintf("%s vs %s", targetName, comparatorName))#sprintf("%s vs %s in %s", targetName, comparatorName, dbName)
+  balancePlot <- balancePlot + geom_hline(yintercept=0.1, linetype="dashed", color = "red")
+
+  assign(paste0("balancePlot","_",gsub("-","_",gsub(" ","",databaseId))), balancePlot, envir = .GlobalEnv)
+  if(!file.exists(file.path(resultFolder,"balance_scatter_plot"))) dir.create(file.path(resultFolder,"balance_scatter_plot"))
+  # ggplot2::ggsave(file.path(resultFolder,"balance_scatter_plot",sprintf("balance_scatter_plot_%s_t%s_c%s_o%d_a%d.eps",
+  #                                                                       dbName,
+  #                                                                       targetName,
+  #                                                                       comparatorName,
+  #                                                                       outcomeId,
+  #                                                                       analysisId)),
+  #                 balancePlot, device = "eps", width = 10, height = 10, units = "cm", dpi = 320)
+  # ggplot2::ggsave(file.path(resultFolder,"balance_scatter_plot",sprintf("balance_scatter_plot_%s_t%s_c%s_o%d_a%d.pdf",
+  #                                                                       dbName,
+  #                                                                       targetName,
+  #                                                                       comparatorName,
+  #                                                                       outcomeId,
+  #                                                                       analysisId)),
+  #                 balancePlot, device = "pdf", width = 10, height = 10, units = "cm", dpi = 320)
+  # ggplot2::ggsave(file.path(resultFolder,"balance_scatter_plot",sprintf("balance_scatter_plot_%s_t%s_c%s_o%d_a%d.tiff",
+  #                                                                       dbName,
+  #                                                                       targetName,
+  #                                                                       comparatorName,
+  #                                                                       outcomeId,
+  #                                                                       analysisId)),
+  #                 balancePlot, device = "tiff", width = 10, height = 10, units = "cm", dpi = 320)
+  ggplot2::ggsave(file.path(resultFolder,"balance_scatter_plot",sprintf("balance_scatter_plot_%s_t%s_c%s_o%d_a%d.png",
+                                                                        dbName,
+                                                                        targetName,
+                                                                        comparatorName,
+                                                                        outcomeId,
+                                                                        analysisId)),
+                  balancePlot, device = "png", width = 10, height = 10, units = "cm", dpi = 80)
+
+  rm(balance)
+
+}
 
 ####Distribution of Preference score####
 returnCamelDf (targetTable = "cm_preference_score_dist",
@@ -254,7 +361,7 @@ for(i in seq(nrow(tcdList))){
          showEquiposeLabel = TRUE,
          equipoiseBounds = equipoiseBounds,
          fileName = file.path(resultFolder,"ps",
-                              sprintf("ps_t_%s_c_%s_a_%s_%s.tiff",targetName, comparatorName, analysisId, dbName)),
+                              sprintf("ps_t_%s_c_%s_a_%s_%s.png",targetName, comparatorName, analysisId, dbName)), #sprintf("ps_t_%s_c_%s_a_%s_%s.tiff",targetName, comparatorName, analysisId, dbName)),
          targetColorR = targetColorR,
          targetColorG = targetColorG,
          targetColorB = targetColorB,
@@ -266,6 +373,8 @@ for(i in seq(nrow(tcdList))){
 
 ####Survival analysis####
 returnCamelDf (targetTable = "cm_kaplan_meier_dist",
+               andromedaObject = cmResultSuite)
+returnCamelDf (targetTable = "cm_result",
                andromedaObject = cmResultSuite)
 
 #Filter resluts for survival plots
@@ -375,8 +484,9 @@ for (i in seq(nrow(resultListForSurvival))){
 returnCamelDf (targetTable = "cm_likelihood_profile",
                andromedaObject = cmResultSuite)
 
-# returnCamelDf (targetTable = "cm_result",
-#                andromedaObject = cmResultSuite)
+returnCamelDf (targetTable = "cm_result",
+               andromedaObject = cmResultSuite)
+
 
 listPrimaryAll <- resultList %>%
   filter(isPrimaryAnalysis == 1) %>%
@@ -409,9 +519,12 @@ for (i in seq(nrow(analysisPrimaryAll))){
 
   if(!file.exists(file.path(resultFolder,"meta"))) dir.create(file.path(resultFolder,"meta"))
 
+  dbLabel <- dbTidy$cdmSourceAbbreviation[match(names(approximations), dbTidy$databaseId)]
+  dbLabel[is.na(dbLabel)] <- "AUSOM(KR)"
+
   EvidenceSynthesis::plotMetaAnalysisForest(
     data = approximations,
-    labels = dbs$cdmSourceAbbreviation[match(names(approximations), dbs$databaseId)],
+    labels = dbLabel,
     estimate = estimate,
     xLabel = "HR",
     summaryLabel = sprintf("Summary\n(%s vs %s)", targetName, comparatorName),
@@ -422,7 +535,6 @@ for (i in seq(nrow(analysisPrimaryAll))){
 
 #primary and those passing the diagnostics
 for (i in seq(analysisPrimaryAll)){
-
   analysisId = analysisPrimaryAll$analysisId[i]
   targetId = analysisPrimaryAll$targetId[i]
   comparatorId = analysisPrimaryAll$comparatorId[i]
@@ -453,10 +565,11 @@ for (i in seq(analysisPrimaryAll)){
   estimate <- EvidenceSynthesis::computeBayesianMetaAnalysis(approximations)
 
   if(!file.exists(file.path(resultFolder,"meta"))) dir.create(file.path(resultFolder,"meta"))
-
+  dbLabel <- dbTidy$cdmSourceAbbreviation[match(names(approximations), dbTidy$databaseId)]
+  dbLabel[is.na(dbLabel)] <- "AUSOM(KR)"
   EvidenceSynthesis::plotMetaAnalysisForest(
     data = approximations,
-    labels = dbs$cdmSourceAbbreviation[match(names(approximations), dbs$databaseId)],
+    labels = dbLabel,
     estimate = estimate,
     xLabel = "Hazard Ratio",
     summaryLabel = sprintf("Summary\n(%s vs %s)", targetName, comparatorName),
