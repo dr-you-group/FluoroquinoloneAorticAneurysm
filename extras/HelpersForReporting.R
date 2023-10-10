@@ -88,28 +88,29 @@ getBalance <- function(connection,
   colnames(balance) <- c("covariateId",
                          "covariateName",
                          "analysisId",
-                         "beforeMatchingMeanTreated",
-                         "beforeMatchingMeanComparator",
-                         "beforeMatchingStdDiff",
-                         "afterMatchingMeanTreated",
-                         "afterMatchingMeanComparator",
-                         "afterMatchingStdDiff")
-  balance$absBeforeMatchingStdDiff <- abs(balance$beforeMatchingStdDiff)
-  balance$absAfterMatchingStdDiff <- abs(balance$afterMatchingStdDiff)
+                         "targetMeanBefore",
+                         "comparatorMeanBefore",
+                         "stdDiffBefore",
+                         "targetMeanAfter",
+                         "comparatorMeanAfter",
+                         "stdDiffAfter")
+  balance$absstdDiffBefore <- abs(balance$stdDiffBefore)
+  balance$absstdDiffAfter <- abs(balance$stdDiffAfter)
   return(balance)
 }
 
 plotCovariateBalanceScatterPlot <- function(balance,
                                             beforeLabel = "Before stratification",
                                             afterLabel = "After stratification",
-                                            limits = NULL) {
-  if(is.null(limits)){limits <- c(min(c(balance$absBeforeMatchingStdDiff, balance$absAfterMatchingStdDiff),
+                                            limits = NULL,
+                                            dotColor = rgb(0, 0, 0.8, alpha = 0.3)) {
+  if(is.null(limits)){limits <- c(min(c(balance$absStdDiffBefore, balance$absStdDiffAfter),
                                       na.rm = TRUE),
-                                  max(c(balance$absBeforeMatchingStdDiff, balance$absAfterMatchingStdDiff),
+                                  max(c(balance$absStdDiffBefore, balance$absStdDiffAfter),
                                       na.rm = TRUE))}
   theme <- ggplot2::element_text(colour = "#000000", size = 12)
-  plot <- ggplot2::ggplot(balance, ggplot2::aes(x = absBeforeMatchingStdDiff, y = absAfterMatchingStdDiff)) +
-    ggplot2::geom_point(color = rgb(0, 0, 0.8, alpha = 0.3), shape = 16, size = 2) +
+  plot <- ggplot2::ggplot(balance, ggplot2::aes(x = absStdDiffBefore, y = absStdDiffAfter)) +
+    ggplot2::geom_point(color = dotColor, shape = 16, size = 2) +
     ggplot2::geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
     ggplot2::geom_hline(yintercept = 0) +
     ggplot2::geom_vline(xintercept = 0) +
@@ -117,73 +118,6 @@ plotCovariateBalanceScatterPlot <- function(balance,
     ggplot2::scale_y_continuous(afterLabel, limits = limits) +
     ggplot2::theme(text = theme)
 
-  return(plot)
-}
-
-plotPs <- function(ps,
-                   targetName,
-                   comparatorName,
-                   targetColor,
-                   comparatorColor,
-                   showEquiposeLabel = TRUE,
-                   equipoiseBounds = c(0.3,0.7),
-                   fileName = NULL) {
-  psOrigin <- ps
-  ps <- rbind(data.frame(x = ps$preferenceScore, y = ps$targetDensity, group = targetName),
-              data.frame(x = ps$preferenceScore, y = ps$comparatorDensity, group = comparatorName))
-  ps$group <- factor(ps$group, levels = c(as.character(targetName), as.character(comparatorName)))
-  theme <- ggplot2::element_text(colour = "#000000", size = 12, margin = ggplot2::margin(0, 0.5, 0, 0.1, "cm"))
-  plot <- ggplot2::ggplot(ps,
-                          ggplot2::aes(x = x, y = y, color = group, group = group, fill = group)) +
-    ggplot2::geom_density(stat = "identity") +
-    ggplot2::scale_fill_manual(values = c(rgb(0.8, 0, 0, alpha = 0.5),
-                                          rgb(0, 0, 0.8, alpha = 0.5))) +
-    ggplot2::scale_color_manual(values = c(rgb(0.8, 0, 0, alpha = 0.5),
-                                           rgb(0, 0, 0.8, alpha = 0.5))) +
-    ggplot2::scale_x_continuous("Preference score", limits = c(0, 1)) +
-    ggplot2::scale_y_continuous("Density") +
-    ggplot2::theme(legend.title = ggplot2::element_blank(),
-                   panel.grid.major = ggplot2::element_blank(),
-                   panel.grid.minor = ggplot2::element_blank(),
-                   legend.position = "top",
-                   legend.text = theme,
-                   axis.text = theme,
-                   axis.title = theme)
-  if (showEquiposeLabel) {
-    labelsLeft <- c()
-    labelsRight <- c()
-    if (showEquiposeLabel) {
-      equiIndex <- psOrigin$preferenceScore>=equipoiseBounds[1] & psOrigin$preferenceScore<=equipoiseBounds[2]
-      equipoise <- mean (sum(psOrigin$targetDensity[equiIndex]), sum(psOrigin$comparatorDensity[equiIndex]))/100
-      labelsRight <- c(labelsRight, sprintf("%2.1f%% is in equipoise",
-                                            equipoise * 100))
-    }
-    if (length(labelsLeft) > 0) {
-      dummy <- data.frame(text = paste(labelsLeft, collapse = "\n"))
-      plot <- plot + ggplot2::geom_label(x = 0, #y = max(d$y) * 1.24,
-                                         hjust = "left", vjust = "top", alpha = 0.8,
-                                         ggplot2::aes(label = text), data = dummy, size = 3.5)
-    }
-    if (length(labelsRight) > 0) {
-      dummy <- data.frame(text = paste(labelsRight, collapse = "\n"))
-      plot <- plot + ggplot2::annotate("label", x = 1, y = max(ps$y) * 1,
-                                       hjust = "right", vjust = "top",
-                                       alpha = 0.8,
-                                       label = labelsRight,
-                                       #ggplot2::aes(label = labelsRight),
-                                       #ggplot2::aes(label = text), data = dummy,
-                                       size = 3.5)
-      # plot <- plot + ggplot2::geom_label(x = 1, y = max(ps$y) * 1.24,
-      #                                    hjust = "right", vjust = "top",
-      #                                    alpha = 0.8,
-      #                                    ggplot2::aes(label = labelsRight),
-      #                                    ggplot2::aes(label = text), data = dummy,
-      #                                    size = 3.5)
-    }
-  }
-  if (!is.null(fileName))
-    ggplot2::ggsave(fileName, plot, width = 5, height = 3.5,
-                    dpi = 400)
   return(plot)
 }
 
@@ -274,6 +208,7 @@ returnCamelDf <- function(targetTable, andromedaObject){
   colnames(newData) <- SqlRender::snakeCaseToCamelCase(colnames(newData))
   camelCaseName <- targetTable %>%
     stringr::str_remove("^cm_") %>%
+    stringr::str_remove("^es_") %>%
     SqlRender::snakeCaseToCamelCase()
 
   assign(camelCaseName, newData, envir = .GlobalEnv)
@@ -293,6 +228,7 @@ plotKaplanMeier <- function(kaplanMeier,
                             comparatorColorG = 144/255,
                             comparatorColorB = 255/255,
                             pValue = NULL,
+                            pValueLocation = NULL,
                             title = NULL,
                             yLabel = NULL,
                             medianIqr = NULL) {
@@ -347,8 +283,30 @@ plotKaplanMeier <- function(kaplanMeier,
     ggplot2::theme(axis.title.y = ggplot2::element_text(vjust = -10))
 
   if(!is.null(pValue)){
-    plot <- plot+ggplot2::annotate("text", label = pValue, parse =T,
-                                   x=Inf,y=-Inf,hjust=2,vjust=-2, color = "black")
+    if(is.null(pValueLocation)|(pValueLocation=="right lower")){
+      plot <- plot+ggplot2::annotate("text", label = pValue, parse =T,
+                                     x=Inf,
+                                     y=-Inf,
+                                     hjust=2,
+                                     vjust=-2,
+                                     color = "black")
+    }
+    if(pValueLocation=="left middle"){
+      plot <- plot+ggplot2::annotate("text", label = pValue, parse =T,
+                                     x = -Inf,
+                                     y = Inf,
+                                     hjust = -0.5, #-1
+                                     vjust = 10,
+                                     color = "black")
+    }
+    if(pValueLocation=="left upper"){
+      plot <- plot+ggplot2::annotate("text", label = pValue, parse =T,
+                                     x = -Inf,
+                                     y = Inf,
+                                     hjust = -0.5, #-1
+                                     vjust = 3,
+                                     color = "black")
+    }
   }
   if(!is.null(title)){
     plot <- plot+ggplot2::ggtitle(title)
@@ -408,3 +366,151 @@ plotKaplanMeier <- function(kaplanMeier,
 splitTable <- function(table, column = 'col') {
   table %>% split(., .[,column]) %>% lapply(., function(x) x[,setdiff(names(x),column)])
 }
+
+# Load meta-analysis data from data folder:
+loadMetaFile <- function(file) {
+  tableName <- gsub(".*\\/es_", "", file)
+  tableName <- gsub("\\.csv", "", tableName)
+  camelCaseName <- SqlRender::snakeCaseToCamelCase(tableName)
+  newData <- read.csv(file)
+  colnames(newData) <- SqlRender::snakeCaseToCamelCase(colnames(newData))
+  # if (exists(camelCaseName, envir = .GlobalEnv)) {
+  #   existingData <- get(camelCaseName, envir = .GlobalEnv)
+  #   newData <- rbind(existingData, newData)
+  # }
+  assign(camelCaseName, newData, envir = .GlobalEnv)
+  invisible(NULL)
+}
+
+#Create/prepare table 1
+prepareTable1 <- function(balance,
+                          beforeLabel = "Before stratification",
+                          afterLabel = "After stratification",
+                          targetLabel = "Target",
+                          comparatorLabel = "Comparator",
+                          percentDigits = 1,
+                          stdDiffDigits = 2,
+                          output = "latex",
+                          pathToCsv = "Table1Specs.csv") {
+  if (output == "latex") {
+    space <- " "
+  } else {
+    space <- "&nbsp;"
+  }
+  specifications <- read.csv(pathToCsv, stringsAsFactors = FALSE)
+
+  fixCase <- function(label) {
+    idx <- (toupper(label) == label)
+    if (any(idx)) {
+      label[idx] <- paste0(substr(label[idx], 1, 1),
+                           tolower(substr(label[idx], 2, nchar(label[idx]))))
+    }
+    return(label)
+  }
+
+  formatPercent <- function(x) {
+    result <- format(round(100 * x, percentDigits), digits = percentDigits + 1, justify = "right")
+    result <- gsub("^-", "<", result)
+    result <- gsub("NA", "", result)
+    result <- gsub(" ", space, result)
+    return(result)
+  }
+
+  formatStdDiff <- function(x) {
+    result <- format(round(x, stdDiffDigits), digits = stdDiffDigits + 1, justify = "right")
+    result <- gsub("NA", "", result)
+    result <- gsub(" ", space, result)
+    return(result)
+  }
+
+  resultsTable <- data.frame()
+  for (i in 1:nrow(specifications)) {
+    if (specifications$analysisId[i] == "") {
+      resultsTable <- rbind(resultsTable,
+                            data.frame(Characteristic = specifications$label[i], value = ""))
+    } else {
+      idx <- balance$analysisId == specifications$analysisId[i]
+      if (any(idx)) {
+        if (specifications$covariateIds[i] != "") {
+          covariateIds <- as.numeric(strsplit(specifications$covariateIds[i], ";")[[1]])
+          idx <- balance$covariateId %in% covariateIds
+        } else {
+          covariateIds <- NULL
+        }
+        if (any(idx)) {
+          balanceSubset <- balance[idx, ]
+          if (is.null(covariateIds)) {
+            balanceSubset <- balanceSubset[order(balanceSubset$covariateId), ]
+          } else {
+            balanceSubset <- merge(balanceSubset, data.frame(covariateId = covariateIds,
+                                                             rn = 1:length(covariateIds)))
+            balanceSubset <- balanceSubset[order(balanceSubset$rn, balanceSubset$covariateId), ]
+          }
+          balanceSubset$covariateName <- fixCase(gsub("^.*: ", "", balanceSubset$covariateName))
+          if (specifications$covariateIds[i] == "" || length(covariateIds) > 1) {
+            resultsTable <- rbind(resultsTable, data.frame(Characteristic = specifications$label[i],
+                                                           targetMeanBefore = NA,
+                                                           comparatorMeanBefore = NA,
+                                                           stdDiffBefore = NA,
+                                                           targetMeanAfter = NA,
+                                                           comparatorMeanAfter = NA,
+                                                           stdDiffAfter = NA,
+                                                           stringsAsFactors = FALSE))
+            resultsTable <- rbind(resultsTable, data.frame(Characteristic = paste0(space,
+                                                                                   space,
+                                                                                   space,
+                                                                                   space,
+                                                                                   balanceSubset$covariateName),
+                                                           targetMeanBefore = balanceSubset$targetMeanBefore,
+                                                           comparatorMeanBefore = balanceSubset$comparatorMeanBefore,
+                                                           stdDiffBefore = balanceSubset$stdDiffBefore,
+                                                           targetMeanAfter = balanceSubset$targetMeanAfter,
+                                                           comparatorMeanAfter = balanceSubset$comparatorMeanAfter,
+                                                           stdDiffAfter = balanceSubset$stdDiffAfter,
+                                                           stringsAsFactors = FALSE))
+          } else {
+            resultsTable <- rbind(resultsTable, data.frame(Characteristic = specifications$label[i],
+                                                           targetMeanBefore = balanceSubset$targetMeanBefore,
+                                                           comparatorMeanBefore = balanceSubset$comparatorMeanBefore,
+                                                           stdDiffBefore = balanceSubset$stdDiffBefore,
+                                                           targetMeanAfter = balanceSubset$targetMeanAfter,
+                                                           comparatorMeanAfter = balanceSubset$comparatorMeanAfter,
+                                                           stdDiffAfter = balanceSubset$stdDiffAfter,
+                                                           stringsAsFactors = FALSE))
+          }
+        }
+      }
+    }
+  }
+  resultsTable$targetMeanBefore <- formatPercent(resultsTable$targetMeanBefore)
+  resultsTable$comparatorMeanBefore <- formatPercent(resultsTable$comparatorMeanBefore)
+  resultsTable$stdDiffBefore <- formatStdDiff(resultsTable$stdDiffBefore)
+  resultsTable$targetMeanAfter <- formatPercent(resultsTable$targetMeanAfter)
+  resultsTable$comparatorMeanAfter <- formatPercent(resultsTable$comparatorMeanAfter)
+  resultsTable$stdDiffAfter <- formatStdDiff(resultsTable$stdDiffAfter)
+
+  headerRow <- as.data.frame(t(rep("", ncol(resultsTable))))
+  colnames(headerRow) <- colnames(resultsTable)
+  headerRow$targetMeanBefore <- targetLabel
+  headerRow$comparatorMeanBefore <- comparatorLabel
+  headerRow$targetMeanAfter <- targetLabel
+  headerRow$comparatorMeanAfter <- comparatorLabel
+
+  subHeaderRow <- as.data.frame(t(rep("", ncol(resultsTable))))
+  colnames(subHeaderRow) <- colnames(resultsTable)
+  subHeaderRow$Characteristic <- "Characteristic"
+  subHeaderRow$targetMeanBefore <- "%"
+  subHeaderRow$comparatorMeanBefore <- "%"
+  subHeaderRow$stdDiffBefore <- "Std. diff"
+  subHeaderRow$targetMeanAfter <- "%"
+  subHeaderRow$comparatorMeanAfter <- "%"
+  subHeaderRow$stdDiffAfter <- "Std. diff"
+
+  resultsTable <- rbind(headerRow, subHeaderRow, resultsTable)
+
+  colnames(resultsTable) <- rep("", ncol(resultsTable))
+  colnames(resultsTable)[2] <- beforeLabel
+  colnames(resultsTable)[5] <- afterLabel
+  return(resultsTable)
+}
+

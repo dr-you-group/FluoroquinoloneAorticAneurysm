@@ -14,11 +14,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # Load necessary library and Set default environment
-
-library(dplyr)
-library(Andromeda)
+library(tidyr)
+library(dplyr) #redundant
+library(Andromeda) #not used anymore
 library(ggplot2)
 library(ggsci)
+library(grid) #plotting diagnostics
+library(forestploter) #plotting diagnostics
+library(forestplot) # plotting meta-analysis
 # install.packages("jsonlite")
 # install.packages("ggplot2")
 
@@ -34,6 +37,8 @@ tempFolder <- Sys.getenv("FluoroquinoloneAorticAneurysm_temp_folder")
 resultFolder <- "/home/rstudio/output/FluoroquinoloneAorticAneurysm_output_folder"
 tempFolder <- "/home/rstudio/temp"
 
+journalTheme <- "jama"
+
 # required packages
 # "SqlRender"
 #"ParallelLogger"
@@ -42,17 +47,28 @@ source("./extras/HelpersForReporting.R")
 # Study setting
 tarPrime <- 60 # The Time-at-risk of primary analysis is defined as 60.
 equipoiseBounds <- c(0.3,0.7)
-targetColorR <- 255/255
-targetColorG <- 99/255
-targetColorB <- 71/255
+targetColor
+comparatorColorTMP
+comparatorColorCPH
 
-comparatorColorR1st <- 30/255
-comparatorColorG1st <- 144/255
-comparatorColorB1st <- 255/255
+# scales::show_col(ggsci::pal_jama("default")(7))
+# scales::show_col(ggsci::pal_lancet("lanonc")(9))
 
-comparatorColorR2nd <- 153/255
-comparatorColorG2nd <- 255/255
-comparatorColorB2nd <- 51/255
+colorTarget <- ggsci::pal_jama("default")(7)[2]
+colorTMP <- ggsci::pal_jama("default")(7)[1]
+colorCPH <- ggsci::pal_jama("default")(7)[5]
+
+targetColorR <- col2rgb(colorTarget)[1]/255#255/255
+targetColorG <- col2rgb(colorTarget)[2]/255#99/255
+targetColorB <- col2rgb(colorTarget)[3]/255#71/255
+
+comparatorColorR1st <- col2rgb(colorTMP)[1]/255#30/255
+comparatorColorG1st <- col2rgb(colorTMP)[2]/255#144/255
+comparatorColorB1st <- col2rgb(colorTMP)[3]/255#255/255
+
+comparatorColorR2nd <- col2rgb(colorCPH)[1]/255#153/255
+comparatorColorG2nd <- col2rgb(colorCPH)[2]/255#255/255
+comparatorColorB2nd <- col2rgb(colorCPH)[3]/255#51/255
 
 # targetColor <- rgb(255/255,99/255,71/255, alpha = 0.8)
 # comparatorColor1st <- rgb(30/255,144/255,255/255, alpha = 0.8)
@@ -97,26 +113,11 @@ cmTableNames <- resultTables %>%
   pull(tableName)
 cmTableNames
 
-#### Retrieve all cm results to local andromeda object ####
-# cmResultSuite <- Andromeda::andromeda()
-# for (targetTable in cmTableNames){
-#   print(sprintf("%s table is now being loaded", targetTable))
-#   sql <- "SELECT * FROM @results_schema.@target_table;"
-#   sql <- SqlRender::render(sql,
-#                            results_schema = resultsSchema,
-#                            target_table = targetTable
-#                            )
-#   sql <- SqlRender::translate(sql, targetDialect = connection@dbms)
-#   DatabaseConnector::querySqlToAndromeda(connection = connection,
-#                                          sql,
-#                                          andromeda = cmResultSuite,
-#                                          andromedaTableName = targetTable,
-#                                          snakeCaseToCamelCase = FALSE,
-#                                          appendToTable = FALSE)
-# }
-# Andromeda::saveAndromeda(cmResultSuite, file.path(tempFolder, "cm_result_suite"))
-cmResultSuite <- Andromeda::loadAndromeda(file.path(tempFolder, "cm_result_suite"))
-# Andromeda::close(cmResultSuite)
+#Filter only es tables
+esTableNames <- resultTables %>%
+  filter(grepl("^es",tableName)) %>%
+  pull(tableName)
+esTableNames
 
 ############################
 ####TCO, Analysis, DB list####
@@ -142,11 +143,15 @@ cohortTidy$cohortName <- cohortTidy %>%
   stringr::str_remove(" -  first ever occurence with at least 365 days prior observation and 1 days follow up observation, males, females") %>%
   stringr::str_remove(", occurs after 2010-01-01 and before 2019-12-31")
 
-cohortTidy$cohortNameAbbreviation <- c("AA", "AD", "AAorAD", "FQ_General", "CPH", "UTI_General", "TMP_General", "FQ", "CPH", "TMP", "UTI")
+cohortTidy$cohortNameAbbreviation <- c("AA", "AD", "AAorAD", "FQ_General", "CPH_General", "UTI_General", "TMP_General", "FQ", "CPH", "TMP", "UTI")
 
 # TCO
-returnCamelDf (targetTable = "cm_target_comparator_outcome",
-               andromedaObject = cmResultSuite)
+# returnCamelDf (targetTable = "cm_target_comparator_outcome",
+#                andromedaObject = cmResultSuite)
+targetComparatorOutcome <- sosPullTable(connection = connection,
+                                        resultsSchema = resultsSchema,
+                                        targetTable = "cm_target_comparator_outcome", #"cd_cohort"
+                                        limit = 0)
 tco <- targetComparatorOutcome %>%
   filter (outcomeOfInterest == 1) %>%
   select (targetId, comparatorId, outcomeId)
@@ -176,9 +181,40 @@ dbs <- sosPullTable(connection = connection,
                     targetTable = "database_meta_data",
                     limit = 0)
 dbTidy <- dbs %>% select(cdmSourceName, cdmSourceAbbreviation, databaseId)
-dbTidy$cdmSourceAbbreviation <- c("JMDC(JP)", "IBM MDCD(US)", "AUSOM(KR)", "NHIS-NSC(KR)", "Optum DOD(US)", "Optum EHR(US)", "IBM CCAE(US)", "PharMetrics(US)" ,"TMUDB(TW)",
-                                  "VA(US)", "CUMC(US)", "Japan Claims(JP)", "LPDAU(AU)", "LPD Italy(IT)", "German DA(DE)", "LPD Belgium(BE)", "Yonsei(KR)"    )
 
+dbTidy$cdmSourceAbbreviation <- ""
+# dbTidy$cdmSourceAbbreviation <- c("JMDC(JP)", "IBM MDCD(US)", "AUSOM(KR)", "NHIS-NSC(KR)", "Optum DOD(US)", "Optum EHR(US)",
+#                                   "IBM CCAE(US)", "PharMetrics(US)" ,"TMUDB(TW)",
+#                                   "VA(US)", "CUMC(US)", "Yonsei(KR)", "LPD IT(IT)", "LPD BE(BE)", "LPD AU(AU)","Japan Claims(JP)","German DA(DE)")
+# dbTidy$cdmSourceAbbreviation <- c("[JP]JMDC", "[US]IBM MDCD", "[KR]AUSOM", "[KR]NHIS-NSC", "[US]Optum DOD", "[US]Optum EHR",
+#                                   "[US]IBM CCAE", "[US]PharMetrics" ,"[TW]TMUDB",
+#                                   "[US]VA", "[US]CUMC", "[KR]Yonsei", "[IT]LPD IT", "[BE]LPD BE", "[AU]LPD AU","[JP]Japan Claims","[DE]German DA")
+##Add abbreviated name
+dbTidy$cdmSourceAbbreviation[grep("Japan Medical Data Center",dbTidy$cdmSourceName)] <- "JMDC(JP)"
+dbTidy$cdmSourceAbbreviation[grep("IBM.*Multi-State Medicaid Database",dbTidy$cdmSourceName)] <- "IBM MDCD(US)"
+dbTidy$cdmSourceAbbreviation[grep("AJOUMC",dbTidy$cdmSourceName)] <- "AUSOM(KR)"
+dbTidy$cdmSourceAbbreviation[grep("National Health Insurance Service.*National Sample Cohort",dbTidy$cdmSourceName)] <- "NHIS-NSC(KR)"
+dbTidy$cdmSourceAbbreviation[grep("Optum.*Clinformatics.*Extended Data Mart.*DOD",dbTidy$cdmSourceName)] <- "Optum DOD(US)"
+dbTidy$cdmSourceAbbreviation[grep("Optum EHR",dbTidy$cdmSourceName)] <- "Optum EHR(US)"
+dbTidy$cdmSourceAbbreviation[grep("PharMetrics",dbTidy$cdmSourceName)] <- "PharMetrics(US)"
+dbTidy$cdmSourceAbbreviation[grep("Taipei Medical University",dbTidy$cdmSourceName)] <- "TMUDB(TW)"
+dbTidy$cdmSourceAbbreviation[grep("Veterans Affairs",dbTidy$cdmSourceName)] <- "VA(US)"
+dbTidy$cdmSourceAbbreviation[grep("CUMC",dbTidy$cdmSourceName)] <- "CUMC(US)"
+dbTidy$cdmSourceAbbreviation[grep("SevCDM",dbTidy$cdmSourceName)] <- "Yonsei(KR)"
+dbTidy$cdmSourceAbbreviation[grep("LPD.*Italy",dbTidy$cdmSourceName)] <- "LPD Italy(IT)"
+dbTidy$cdmSourceAbbreviation[grep("LPD.*Belgium",dbTidy$cdmSourceName)] <- "LPD Begium(BE)"
+dbTidy$cdmSourceAbbreviation[grep("LPD.*Australia",dbTidy$cdmSourceName)] <- "LPD Australia(AU)"
+dbTidy$cdmSourceAbbreviation[grep("Japan Claims",dbTidy$cdmSourceName)] <- "Japan Claims(JP)"
+dbTidy$cdmSourceAbbreviation[grep("German Disease Analyzer",dbTidy$cdmSourceName)] <- "German DA(DE)"
+dbTidy$cdmSourceAbbreviation[grep("IBM Health MarketScan.*Commercial Claims and Encounters Database",dbTidy$cdmSourceName)] <- "IBM CCAE(US)"
+
+country <- stringr::str_extract(dbTidy$cdmSourceAbbreviation, "\\([A-Z][A-Z]\\)") %>% stringr::str_remove_all("\\(|\\)")
+country <- factor(country, c("US","TW", "KR","JP", "AU", "DE","BE","IT") )
+dbTidy$country <- country
+dbTidy<- dbTidy %>%
+  group_by(country) %>%
+  arrange(cdmSourceAbbreviation, .by_group = TRUE)
+dbTidy$dbOrder <- 1:nrow(dbTidy)
 
 # results
 cmAttrition <- sosPullTable(connection = connection,
@@ -186,15 +222,11 @@ cmAttrition <- sosPullTable(connection = connection,
                             targetTable = "cm_attrition",
                             limit = 0)
 
-cmAttrition %>% filter(databaseId %in% c(720217577, -1608353505,-1230918510, 597953468)) %>% filter(subjects != 0)
-cmAttrition %>% filter(databaseId %in% c(720217577))
-cmAttrition %>% filter(databaseId %in% c(-1608353505))
-cmAttrition %>% filter(databaseId %in% c(-1230918510))
-cmAttrition %>% filter(databaseId %in% c(597953468))
-
 # Find Primary analysis
-returnCamelDf (targetTable = "cm_analysis",
-               andromedaObject = cmResultSuite)
+analysis <- sosPullTable(connection = connection,
+                         resultsSchema = resultsSchema,
+                         targetTable = "cm_analysis",
+                         limit = 0)
 
 analysisTidy <- analysis
 analysisTidy$isPrimaryAnalysis <- 0
@@ -210,8 +242,10 @@ analysisTidy <- analysisTidy %>% rename(descriptionAnalysis = description)
 analysisIdPrime = analysisTidy$analysisId[analysisTidy$isPrimaryAnalysis==1]#analysisIdPrime = c(2)
 
 # Results of Diagnostics
-returnCamelDf (targetTable = "cm_diagnostics_summary",
-               andromedaObject = cmResultSuite)
+diagnosticsSummary <- sosPullTable(connection = connection,
+                                   resultsSchema = resultsSchema,
+                                   targetTable = "cm_diagnostics_summary",
+                                   limit = 0)
 
 resultList <- diagnosticsSummary %>%
   left_join(dbTidy,
@@ -222,62 +256,112 @@ resultList <- diagnosticsSummary %>%
             by = c("targetId", "comparatorId", "outcomeId")
   )
 
-####Balance plot####
-returnCamelDf (targetTable = "cm_shared_covariate_balance",
-               andromedaObject = cmResultSuite)
-returnCamelDf (targetTable = "cm_covariate_balance",
-               andromedaObject = cmResultSuite)
-names(cmResultSuite)
 
-#Filter results for survival plots
+####Balance table and plot####
+sharedCovariateBalance <- sosPullTable(connection = connection,
+                                       resultsSchema = resultsSchema,
+                                       targetTable = "cm_shared_covariate_balance",
+                                       limit = 0)
+covariateBalance <- sosPullTable(connection = connection,
+                                 resultsSchema = resultsSchema,
+                                 targetTable = "cm_covariate_balance",
+                                 limit = 0)
+covariate <- sosPullTable(connection = connection,
+                          resultsSchema = resultsSchema,
+                          targetTable = "cm_covariate",
+                          limit = 0)
+# returnCamelDf (targetTable = "cm_shared_covariate_balance",
+#                andromedaObject = cmResultSuite)
+# returnCamelDf (targetTable = "cm_covariate_balance",
+#                andromedaObject = cmResultSuite)
+
+#Filter results for balance
 resultListForBalance <- resultList %>%
   filter(isPrimaryAnalysis == 1) %>%
   filter(isPrimaryTco == 1)
 
+#Balance table
 for(i in seq(nrow(resultListForBalance))){
-  if(!resultListForBalance$isPrimaryAnalysis[i]) next #Only plot PS distribution for primary analysis
+  if(!resultListForBalance$isPrimaryAnalysis[i]) next #Only plot PS distribution for primary analysis #redundant#
 
   databaseId <- resultListForBalance[i,]$databaseId
   targetId <- resultListForBalance[i,]$targetId
   comparatorId <- resultListForBalance[i,]$comparatorId
   analysisId <- resultListForBalance[i,]$analysisId
   outcomeId = resultListForBalance$outcomeId[i]
-  # targetColorR <- tcdList[i,]$targetColorR
-  # targetColorG <- tcdList[i,]$targetColorG
-  # targetColorB <- tcdList[i,]$targetColorB
-  # comparatorColorR <- tcdList[i,]$comparatorColorR
-  # comparatorColorG <- tcdList[i,]$comparatorColorG
-  # comparatorColorB <- tcdList[i,]$comparatorColorB
-
-  balance = sharedCovariateBalance %>% filter(databaseId == !!databaseId,
-                                        targetId == !!targetId,
-                                        comparatorId == !!comparatorId,
-                                        analysisId == !!analysisId)
-  balance$absBeforeMatchingStdDiff <- abs(balance$stdDiffBefore)
-  balance$absAfterMatchingStdDiff <- abs(balance$stdDiffAfter)
-
+  comparatorColorR <- resultListForBalance[i,]$comparatorColorR
+  comparatorColorG <- resultListForBalance[i,]$comparatorColorG
+  comparatorColorB <- resultListForBalance[i,]$comparatorColorB
   targetName <- resultListForBalance[i,]$targetAbbreviation
   comparatorName <- resultListForBalance[i,]$comparatorAbbreviation
-  dbName <- resultListForBalance[i,]$cdmSourceAbbreviation
+  cdmSourceAbbreviation <- resultListForBalance[i,]$cdmSourceAbbreviation
+
+  balanceTemp <- sharedCovariateBalance %>% filter(databaseId == !!databaseId,
+                                                   targetId == !!targetId,
+                                                   comparatorId == !!comparatorId,
+                                                   analysisId == !!analysisId)
+  covariateTemp <- covariate %>%
+    filter(databaseId == !!databaseId,
+           analysisId == !!analysisId) %>%
+    select(covariateId, covariateAnalysisId, covariateName)
+  balance <- merge(balanceTemp, covariateTemp)
+  rm(balanceTemp, covariateTemp)
 
   if(nrow(balance)==0) next
+  #change column name
+  balance$analysisId <- NULL
+  balance <- rename(balance, analysisId = covariateAnalysisId)
+
+  ##Table 1
+  Table1 <- prepareTable1(balance,
+                          beforeLabel = "Before matching",
+                          afterLabel = "After matching",
+                          targetLabel = targetName,
+                          comparatorLabel = comparatorName,
+                          percentDigits = 1,
+                          stdDiffDigits = 2,
+                          output = "latex",
+                          pathToCsv = file.path("extras/","Table1Specs.csv"))
+  Table1[,1]<-as.character(Table1[,1])
+  Table1[,1]<-gsub(" \\(Unknown unit\\)","",Table1[,1])
+
+  # Table1<-labFormmating(Table1,percentDigits=1)
+  if(!file.exists(file.path(resultFolder,"Table1"))) dir.create(file.path(resultFolder,"Table1"))
+
+  write.csv(Table1,file.path(resultFolder, "Table1",sprintf("Table1_%s_t%s_c%s_o%s_a%s.csv",
+                                                            cdmSourceAbbreviation,
+                                                            targetName,
+                                                            comparatorName,
+                                                            outcomeId,
+                                                            analysisId
+  )))
+
+  ## Balance plot
+  balance$absStdDiffBefore <- abs(balance$stdDiffBefore)
+  balance$absStdDiffAfter <- abs(balance$stdDiffAfter)
 
   balancePlot <- plotCovariateBalanceScatterPlot(balance,
                                                  beforeLabel = "Before matching",
                                                  afterLabel = "After matching",
+                                                 dotColor = rgb(comparatorColorR, comparatorColorG, comparatorColorB, alpha = 0.3),
                                                  limits = c(0,0.4))
-
-
 
   balancePlot<-balancePlot+ annotate("label", label = sprintf(" Number of covariates: %s\nAfter matching max(absolute):%s",
                                                               format(nrow(balance), big.mark=",", scientific=FALSE),
-                                                              format(round(max(balance$absAfterMatchingStdDiff),2),nsmall=2)),
+                                                              format(round(max(balance$absStdDiffAfter),2),nsmall=2)),
                                      x = -Inf, y = Inf, hjust=-0.2,vjust=2, color = "black");balancePlot
-  balancePlot <- balancePlot + ggtitle(sprintf("%s vs %s", targetName, comparatorName))#sprintf("%s vs %s in %s", targetName, comparatorName, dbName)
+  balancePlot <- balancePlot + ggtitle(sprintf("%s vs %s in %s", targetName, comparatorName, cdmSourceAbbreviation))#sprintf("%s vs %s in %s", targetName, comparatorName, dbName)
   balancePlot <- balancePlot + geom_hline(yintercept=0.1, linetype="dashed", color = "red")
 
-  assign(paste0("balancePlot","_",gsub("-","_",gsub(" ","",databaseId))), balancePlot, envir = .GlobalEnv)
+  # assign(paste0("balancePlot","_",gsub("-","_",gsub(" ","",databaseId))), balancePlot, envir = .GlobalEnv)
   if(!file.exists(file.path(resultFolder,"balance_scatter_plot"))) dir.create(file.path(resultFolder,"balance_scatter_plot"))
+  ggplot2::ggsave(file.path(resultFolder,"balance_scatter_plot",sprintf("balance_scatter_plot_%s_t%s_c%s_o%d_a%d.png",
+                                                                        cdmSourceAbbreviation,
+                                                                        targetName,
+                                                                        comparatorName,
+                                                                        outcomeId,
+                                                                        analysisId)),
+                  balancePlot, device = "png", width = 10, height = 10, units = "cm", dpi = 200)
   # ggplot2::ggsave(file.path(resultFolder,"balance_scatter_plot",sprintf("balance_scatter_plot_%s_t%s_c%s_o%d_a%d.eps",
   #                                                                       dbName,
   #                                                                       targetName,
@@ -299,21 +383,17 @@ for(i in seq(nrow(resultListForBalance))){
   #                                                                       outcomeId,
   #                                                                       analysisId)),
   #                 balancePlot, device = "tiff", width = 10, height = 10, units = "cm", dpi = 320)
-  ggplot2::ggsave(file.path(resultFolder,"balance_scatter_plot",sprintf("balance_scatter_plot_%s_t%s_c%s_o%d_a%d.png",
-                                                                        dbName,
-                                                                        targetName,
-                                                                        comparatorName,
-                                                                        outcomeId,
-                                                                        analysisId)),
-                  balancePlot, device = "png", width = 10, height = 10, units = "cm", dpi = 80)
+
 
   rm(balance)
-
 }
+#####
 
 ####Distribution of Preference score####
-returnCamelDf (targetTable = "cm_preference_score_dist",
-               andromedaObject = cmResultSuite)
+preferenceScoreDist <- sosPullTable(connection = connection,
+                                    resultsSchema = resultsSchema,
+                                    targetTable = "cm_preference_score_dist",
+                                    limit = 0)
 
 tcdList <- resultList %>% select(analysisId, targetId, comparatorId, databaseId,
                                  equipoise, equipoiseDiagnostic, # unblind,
@@ -321,14 +401,9 @@ tcdList <- resultList %>% select(analysisId, targetId, comparatorId, databaseId,
                                  descriptionAnalysis, isPrimaryAnalysis,
                                  targetName, targetAbbreviation,
                                  comparatorName, comparatorAbbreviation,
-                                 targetColorR, targetColorG, targetColorB,
+                                 # targetColorR, targetColorG, targetColorB,
                                  comparatorColorR, comparatorColorG, comparatorColorB) %>%
   unique()
-
-# preferenceScoreDistWithDescription <- preferenceScoreDist %>%
-#   left_join(tcdList,
-#             by = c("analysisId", "targetId", "comparatorId", "databaseId"))
-# nrow(preferenceScoreDist) == nrow(preferenceScoreDistWithDescription)
 
 for(i in seq(nrow(tcdList))){
   if(!tcdList$isPrimaryAnalysis[i]) next #Only plot PS distribution for primary analysis
@@ -337,9 +412,9 @@ for(i in seq(nrow(tcdList))){
   targetId <- tcdList[i,]$targetId
   comparatorId <- tcdList[i,]$comparatorId
   analysisId <- tcdList[i,]$analysisId
-  targetColorR <- tcdList[i,]$targetColorR
-  targetColorG <- tcdList[i,]$targetColorG
-  targetColorB <- tcdList[i,]$targetColorB
+  # targetColorR <- tcdList[i,]$targetColorR
+  # targetColorG <- tcdList[i,]$targetColorG
+  # targetColorB <- tcdList[i,]$targetColorB
   comparatorColorR <- tcdList[i,]$comparatorColorR
   comparatorColorG <- tcdList[i,]$comparatorColorG
   comparatorColorB <- tcdList[i,]$comparatorColorB
@@ -350,45 +425,56 @@ for(i in seq(nrow(tcdList))){
                                       analysisId == !!analysisId)
   targetName <- tcdList[i,]$targetAbbreviation
   comparatorName <- tcdList[i,]$comparatorAbbreviation
-  dbName <- tcdList[i,]$cdmSourceAbbreviation
+  cdmSourceAbbreviation <- tcdList[i,]$cdmSourceAbbreviation
 
   if(nrow(ps)==0) next
 
   if(!file.exists(file.path(resultFolder,"ps"))) dir.create(file.path(resultFolder,"ps"))
-  plotPs(ps,
-         targetName= targetName,
-         comparatorName = comparatorName,
-         showEquiposeLabel = TRUE,
-         equipoiseBounds = equipoiseBounds,
-         fileName = file.path(resultFolder,"ps",
-                              sprintf("ps_t_%s_c_%s_a_%s_%s.png",targetName, comparatorName, analysisId, dbName)), #sprintf("ps_t_%s_c_%s_a_%s_%s.tiff",targetName, comparatorName, analysisId, dbName)),
-         targetColorR = targetColorR,
-         targetColorG = targetColorG,
-         targetColorB = targetColorB,
-         comparatorColorR = comparatorColorR,
-         comparatorColorG = comparatorColorG,
-         comparatorColorB = comparatorColorB
+  psPlot <- plotPs(ps,
+                   targetName= targetName,
+                   comparatorName = comparatorName,
+                   showEquiposeLabel = TRUE,
+                   equipoiseBounds = equipoiseBounds,
+                   targetColorR = targetColorR,
+                   targetColorG = targetColorG,
+                   targetColorB = targetColorB,
+                   comparatorColorR = comparatorColorR,
+                   comparatorColorG = comparatorColorG,
+                   comparatorColorB = comparatorColorB
+  )
+  psPlot <- psPlot + ggtitle(sprintf("%s vs %s in %s", targetName, comparatorName, cdmSourceAbbreviation))#sprintf("%s vs %s in %s", targetName, comparatorName, dbName)
+  ggplot2::ggsave(file.path(resultFolder,"ps",
+                            sprintf("ps_t_%s_c_%s_a_%s_%s.png",targetName, comparatorName, analysisId, cdmSourceAbbreviation)),
+                  #sprintf("ps_t_%s_c_%s_a_%s_%s.tiff",targetName, comparatorName, analysisId, dbName)),
+                  psPlot,
+                  width = 5, height = 3.8, #height was increased due to title
+                  dpi = 200 #400
   )
 }
+#####
 
 ####Survival analysis####
-returnCamelDf (targetTable = "cm_kaplan_meier_dist",
-               andromedaObject = cmResultSuite)
-returnCamelDf (targetTable = "cm_result",
-               andromedaObject = cmResultSuite)
+kaplanMeierDist <- sosPullTable(connection = connection,
+                                resultsSchema = resultsSchema,
+                                targetTable = "cm_kaplan_meier_dist",
+                                limit = 0)
+result <- sosPullTable(connection = connection,
+                       resultsSchema = resultsSchema,
+                       targetTable = "cm_result",
+                       limit = 0)
 
 #Filter resluts for survival plots
 resultListForSurvival <- resultList %>%
   filter(isPrimaryAnalysis == 1) %>%
-  filter(isPrimaryTco == 1) %>%
-  filter(unblind == 1) #only results passing the diagnostics
+  filter(isPrimaryTco == 1) #%>% filter(unblind == 1) #only results passing the diagnostics
 
 yLimUpperBound =
   1- kaplanMeierDist %>%
   filter(analysisId %in% unique(resultListForSurvival$analysisId)) %>%
   filter(outcomeId %in% unique(resultListForSurvival$outcomeId)) %>%
   summarise(yLimUpperBound = min(targetSurvivalLb, comparatorSurvivalLb))
-yLimUpperBound = round(yLimUpperBound*1.3, digits = 3)
+#convert into percent (*100)
+yLimUpperBound = round(yLimUpperBound*100*1.3, digits = 2)
 
 for (i in seq(nrow(resultListForSurvival))){
 
@@ -402,9 +488,9 @@ for (i in seq(nrow(resultListForSurvival))){
   databaseId <- resultListForSurvival$databaseId[i]
   databaseName <- resultListForSurvival$cdmSourceAbbreviation[i]
 
-  targetColorR <- resultListForSurvival$targetColorR[i]
-  targetColorG <- resultListForSurvival$targetColorG[i]
-  targetColorB <- resultListForSurvival$targetColorB[i]
+  # targetColorR <- resultListForSurvival$targetColorR[i]
+  # targetColorG <- resultListForSurvival$targetColorG[i]
+  # targetColorB <- resultListForSurvival$targetColorB[i]
   comparatorColorR <- resultListForSurvival$comparatorColorR[i]
   comparatorColorG <- resultListForSurvival$comparatorColorG[i]
   comparatorColorB <- resultListForSurvival$comparatorColorB[i]
@@ -422,13 +508,15 @@ for (i in seq(nrow(resultListForSurvival))){
                        result$targetId == targetId&
                        result$comparatorId == comparatorId
                      ,]
+  #convert to 'percent' by multiplying with 100
+  kaplanMeier$targetSurvival <- (1-kaplanMeier$targetSurvival)*100
+  kaplanMeier$targetSurvivalLb <-(1-kaplanMeier$targetSurvivalLb)*100
+  kaplanMeier$targetSurvivalUb <-(1-kaplanMeier$targetSurvivalUb)*100
+  kaplanMeier$comparatorSurvival <-(1-kaplanMeier$comparatorSurvival)*100
+  kaplanMeier$comparatorSurvivalLb <-(1-kaplanMeier$comparatorSurvivalLb)*100
+  kaplanMeier$comparatorSurvivalUb <-(1-kaplanMeier$comparatorSurvivalUb)*100
 
-  kaplanMeier$targetSurvival <- 1-kaplanMeier$targetSurvival
-  kaplanMeier$targetSurvivalLb <-1-kaplanMeier$targetSurvivalLb
-  kaplanMeier$targetSurvivalUb <-1-kaplanMeier$targetSurvivalUb
-  kaplanMeier$comparatorSurvival <-1-kaplanMeier$comparatorSurvival
-  kaplanMeier$comparatorSurvivalLb <-1-kaplanMeier$comparatorSurvivalLb
-  kaplanMeier$comparatorSurvivalUb <-1-kaplanMeier$comparatorSurvivalUb
+
   if(is.na(unique(kpResult$p))) next
   if(length(unique(kpResult$p))>1) next
 
@@ -442,12 +530,10 @@ for (i in seq(nrow(resultListForSurvival))){
                       unique(kpResult$p))
 
   }
-
-
   p <-plotKaplanMeier(kaplanMeier,
                       targetName,
                       comparatorName,
-                      ylims = c(0,0.003),#c(0,round(max(kaplanMeier$comparatorSurvivalUb,kaplanMeier$targetSurvivalUb),2)+0.02),
+                      ylims = c(0,0.25),#c(0,round(max(kaplanMeier$comparatorSurvivalUb,kaplanMeier$targetSurvivalUb),2)+0.02),
                       xBreaks = NULL,#seq(from = 0,to = 2000, by = 250),#c(0,100,200,300),
                       targetColorR = targetColorR,
                       targetColorG = targetColorG,
@@ -456,124 +542,408 @@ for (i in seq(nrow(resultListForSurvival))){
                       comparatorColorG = comparatorColorG,
                       comparatorColorB = comparatorColorB,
                       pValue = pValue,
-                      title = sprintf("%s vs %s for %s in %s ", targetName, comparatorName, outcomeName, databaseName))
+                      pValueLocation = "left middle",
+                      yLabel = "Cumulative Incidence (%)",
+                      title = sprintf("%s vs %s in %s ", targetName, comparatorName, databaseName))
 
-  if(!file.exists(file.path(resultFolder,"kmplot"))) dir.create(file.path(resultFolder,"kmplot"))
-  ggplot2::ggsave(file.path(resultFolder,"kmplot",sprintf("km_plot_%s_t%d_c%d_o%d_a%d.eps",
-                                                          databaseId,
-                                                          targetId,
-                                                          comparatorId,
+if(!file.exists(file.path(resultFolder,"kmplot"))) dir.create(file.path(resultFolder,"kmplot"))
+  ggplot2::ggsave(file.path(resultFolder,"kmplot",sprintf("km_plot_%s_t%s_c%s_o%d_a%d.png",
+                                                          databaseName,
+                                                          targetName,
+                                                          comparatorName,
                                                           outcomeId,
-                                                          analysisId)), p, device = "eps", width = 16, height = 12, units = "cm", dpi = 400)
-  ggplot2::ggsave(file.path(resultFolder,"kmplot",sprintf("km_plot_%s_t%d_c%d_o%d_a%d.pdf",
-                                                          databaseId,
-                                                          targetId,
-                                                          comparatorId,
+                                                          analysisId)), p, device = "png", width = 19, height = 12, units = "cm", dpi = 200)
+  ggplot2::ggsave(file.path(resultFolder,"kmplot",sprintf("km_plot_%s_t%s_c%s_o%d_a%d.eps",
+                                                          databaseName,
+                                                          targetName,
+                                                          comparatorName,
                                                           outcomeId,
-                                                          analysisId)), p, device = "pdf", width = 16, height = 12, units = "cm", dpi = 400)
-  ggplot2::ggsave(file.path(resultFolder,"kmplot",sprintf("km_plot_%s_t%d_c%d_o%d_a%d.tiff",
-                                                          databaseId,
-                                                          targetId,
-                                                          comparatorId,
+                                                          analysisId)), p, device = "eps", width = 19, height = 12, units = "cm", dpi = 400)
+  ggplot2::ggsave(file.path(resultFolder,"kmplot",sprintf("km_plot_%s_t%s_c%s_o%d_a%d.pdf",
+                                                          databaseName,
+                                                          targetName,
+                                                          comparatorName,
                                                           outcomeId,
-                                                          analysisId)), p, device = "tiff", width = 16, height = 12, units = "cm", dpi = 400)
-  #}
+                                                          analysisId)), p, device = "pdf", width = 19, height = 12, units = "cm", dpi = 400)
+  # ggplot2::ggsave(file.path(resultFolder,"kmplot",sprintf("km_plot_%s_t%s_c%s_o%d_a%d.tiff",
+  #                                                         databaseId,
+  #                                                         targetId,
+  #                                                         comparatorId,
+  #                                                         outcomeId,
+  #                                                         analysisId)), p, device = "tiff", width = 16, height = 12, units = "cm", dpi = 400)
+
 }
+#####
 
-####Meta-analysis####
-returnCamelDf (targetTable = "cm_likelihood_profile",
-               andromedaObject = cmResultSuite)
+####Diagnostics plot####
+# https://cran.r-project.org/web/packages/forestploter/vignettes/forestploter-intro.html
+# https://github.com/cran/forestploter
+# https://youtu.be/reXmH_QyOio?si=ku9j_dmatkWBPP-F
+excludingDbs <- c("German DA(DE)", "LPD Begium(BE)", "LPD Italy(IT)")
 
-returnCamelDf (targetTable = "cm_result",
-               andromedaObject = cmResultSuite)
+#redundant
+result <- sosPullTable(connection = connection,
+                         resultsSchema = resultsSchema,
+                         targetTable = "cm_result", #"cd_cohort"
+                         limit = 0)
+cmDiagnostics <- sosPullTable(connection = connection,
+                       resultsSchema = resultsSchema,
+                       targetTable = "cm_diagnostics_summary", #"cd_cohort"
+                       limit = 0)
 
+cmResult <- result %>% left_join(cmDiagnostics, by = c("analysisId", "targetId", "comparatorId", "outcomeId", "databaseId"))
+cmResult <- cmResult %>%
+  left_join(dbTidy, by = "databaseId") %>%
+  arrange(dbOrder)
 
-listPrimaryAll <- resultList %>%
-  filter(isPrimaryAnalysis == 1) %>%
-  filter(isPrimaryTco == 1)
+#exclude results from excluding dbs
+cmResult <- cmResult %>% filter(!(cdmSourceAbbreviation %in% excludingDbs))
 
-analysisPrimaryAll <- listPrimaryAll %>%
-  select(targetId, comparatorId, outcomeId, analysisId,
-         targetAbbreviation, comparatorAbbreviation, outcomeAbbreviation) %>%
-  unique()
+cmResult <- cmResult %>%
+  mutate(targetIncidence = gsub("-","<",format(round(targetOutcomes/(targetDays/365.25)*1000,2), nsmall=2))) %>%
+  mutate(comparatorIncidence = gsub("-","<",format(round(comparatorOutcomes/(comparatorDays/365.25)*1000,2), nsmall=2)))
 
-for (i in seq(nrow(analysisPrimaryAll))){
-
-  analysisId = analysisPrimaryAll$analysisId[i]
-  targetId = analysisPrimaryAll$targetId[i]
-  comparatorId = analysisPrimaryAll$comparatorId[i]
-  outcomeId = analysisPrimaryAll$outcomeId[i]
-  targetName = analysisPrimaryAll$targetAbbreviation[i]
-  comparatorName = analysisPrimaryAll$comparatorAbbreviation[i]
-  outcomeName = analysisPrimaryAll$outcomeAbbreviation[i]
-
-  sampleLP <- likelihoodProfile %>% filter(targetId == !!targetId,
-                                           comparatorId == !!comparatorId,
-                                           outcomeId == !!outcomeId,
-                                           analysisId == !!analysisId
+cmResult <- cmResult %>%
+  mutate(`Max SDM` = format(round(sharedMaxSdm,2), nsmall=2)) %>%
+  mutate(`PS overlap` = format(round(equipoise,2), nsmall=2)) %>%
+  mutate(`EASE` = format(round(ease,2), nsmall=2)) %>%
+  mutate(`HR (95% CI)` = paste0(format(round(calibratedRr,2), nsmall=2),
+                                "(",
+                                format(round(calibratedCi95Lb,2),  nsmall=2),
+                                "-",
+                                format(round(calibratedCi95Ub,2), nsmall=2),
+                                ")"
   )
-  approx <- sampleLP %>% select("logRr", "logLikelihood", "databaseId")
-  colnames(approx)[1:2] <- c("point", "value")
-  approximations <- splitTable(approx, 'databaseId')
-  estimate <- EvidenceSynthesis::computeBayesianMetaAnalysis(approximations)
-
-  if(!file.exists(file.path(resultFolder,"meta"))) dir.create(file.path(resultFolder,"meta"))
-
-  dbLabel <- dbTidy$cdmSourceAbbreviation[match(names(approximations), dbTidy$databaseId)]
-  dbLabel[is.na(dbLabel)] <- "AUSOM(KR)"
-
-  EvidenceSynthesis::plotMetaAnalysisForest(
-    data = approximations,
-    labels = dbLabel,
-    estimate = estimate,
-    xLabel = "HR",
-    summaryLabel = sprintf("Summary\n(%s vs %s)", targetName, comparatorName),
-    showLikelihood = TRUE,
-    fileName  = file.path(resultFolder, "meta", sprintf("t%sc%so%sa%s_all.png", targetName, comparatorName, outcomeId, analysisId))
   )
-}
+cmResult$`Diagnostics` <- ifelse(cmResult$unblind, "PASS", "FAIL")
+cmResult$`Matched(n)` <- format(cmResult$targetSubjects, trim = F, big.mark = " ")
 
-#primary and those passing the diagnostics
-for (i in seq(analysisPrimaryAll)){
-  analysisId = analysisPrimaryAll$analysisId[i]
-  targetId = analysisPrimaryAll$targetId[i]
-  comparatorId = analysisPrimaryAll$comparatorId[i]
-  outcomeId = analysisPrimaryAll$outcomeId[i]
-  targetName = analysisPrimaryAll$targetAbbreviation[i]
-  comparatorName = analysisPrimaryAll$comparatorAbbreviation[i]
-  outcomeName = analysisPrimaryAll$outcomeAbbreviation[i]
 
-  databaseIds <- resultList %>%
-    filter(targetId == !!targetId,
-           comparatorId == !!comparatorId,
-           outcomeId == !!outcomeId,
-           analysisId == !!analysisId) %>%
-    filter(unblind == 1) %>%
-    pull(databaseId)
+# diagnosticsList <- cmDiagnostics %>%
+#   left_join(dbTidy,
+#             by = "databaseId") %>%
+#   left_join(analysisTidy,
+#             by = "analysisId") %>%
+#   left_join(tcoTidy,
+#             by = c("targetId", "comparatorId", "outcomeId")
+#   ) %>%
+#   filter(isPrimaryAnalysis == 1) %>%
+#   filter(isPrimaryTco == 1)
 
-  sampleLP <- likelihoodProfile %>%
-    filter(targetId == !!targetId,
-           comparatorId == !!comparatorId,
-           outcomeId == !!outcomeId,
-           analysisId == !!analysisId
-    ) %>%
-    filter (databaseId %in% !!databaseIds) #only those passing diagnostics
+####FQ vs TMP
+comparatorAbbreviation <- "TMP"
+cmResultOfInt <- cmResult %>% filter(analysisId ==2,
+                                     outcomeId == 1782489,
+                                     targetId == 1782488001,
+                                     comparatorId == 1782670001) ##TMP
+comparatorColor = colorTMP#"#a6bddb"
+cmResultOfInt$`HR (95% CI)`<- gsub("-      ","-",cmResultOfInt$`HR (95% CI)`) #Remove space
 
-  approx <- sampleLP %>% select("logRr", "logLikelihood", "databaseId")
-  colnames(approx)[1:2] <- c("point", "value")
-  approximations <- splitTable(approx, 'databaseId')
-  estimate <- EvidenceSynthesis::computeBayesianMetaAnalysis(approximations)
+#Rename columns
+cmResultOfInt <- cmResultOfInt %>%
+  rename(Source = cdmSourceAbbreviation) %>%
+  rename(FQ = targetIncidence)
 
-  if(!file.exists(file.path(resultFolder,"meta"))) dir.create(file.path(resultFolder,"meta"))
-  dbLabel <- dbTidy$cdmSourceAbbreviation[match(names(approximations), dbTidy$databaseId)]
-  dbLabel[is.na(dbLabel)] <- "AUSOM(KR)"
-  EvidenceSynthesis::plotMetaAnalysisForest(
-    data = approximations,
-    labels = dbLabel,
-    estimate = estimate,
-    xLabel = "Hazard Ratio",
-    summaryLabel = sprintf("Summary\n(%s vs %s)", targetName, comparatorName),
-    showLikelihood = TRUE,
-    fileName  = file.path(resultFolder, "meta", sprintf("t%sc%so%sa%s_passing_diag.png", targetName, comparatorName, outcomeId, analysisId))
-  )
-}
+colnames(cmResultOfInt)[colnames(cmResultOfInt)=="comparatorIncidence"] <- comparatorAbbreviation # rlang::ensym(comparatorAbbreviation)
+
+equipoiseAlpha <- (cmResultOfInt$equipoise)/2 #dividing by 2 to make brighter
+equipoiseAlpha[is.na(equipoiseAlpha)]<-0 #replace NA with 0
+
+tm <- forestploter::forest_theme(core=list(
+  # fg_params=list(hjust=c(1, 0, 0, 0.5),
+  #                                                         x=c(0.9, 0.1, 0, 0.5)),
+  bg_params=list(fill = comparatorColor, #"#f6eff7", "#d0d1e6", "#a6bddb", "#67a9cf"
+                 alpha = equipoiseAlpha
+  ))
+  ,
+  colhead=list(fg_params=list(hjust=c(1, 0, 0, 0, 0.5),
+                              x=c(0.9, 0.1, 0, 0, 0.5)))
+)
+
+cmResultOfInt <- cmResultOfInt %>%
+  mutate(targetIncidence = gsub("-","<",format(round(targetOutcomes/(targetDays/365.25)*1000,2), nsmall=2))) %>%
+  mutate(comparatorIncidence = gsub("-","<",format(round(comparatorOutcomes/(comparatorDays/365.25)*1000,2), nsmall=2)))
+
+cmResultOfInt$` ` <- paste(rep(" ", 20), collapse = " ")
+
+p <- forestploter::forest (cmResultOfInt[,c("Source", "Matched(n)", "FQ", comparatorAbbreviation," ","HR (95% CI)","Max SDM","PS overlap","EASE", "Diagnostics")], #
+                           est = cmResultOfInt$calibratedRr,
+                           lower = cmResultOfInt$calibratedCi95Lb,
+                           upper = cmResultOfInt$calibratedCi95Ub,
+                           # sizes = (log(cmResultOfInt$calibratedCi95Ub) - log(cmResultOfInt$calibratedCi95Lb))/1.96,
+                           ci_column = 5,
+                           ref_line = 1,
+                           arrow_lab = c("Favors FQ", sprintf("Favors %s",comparatorAbbreviation)),
+                           xlim = c(0.5, 2),
+                           ticks_at = c(0.5, 1, 2),
+                           x_trans = "log",
+                           # footnote = "This is the demo data. Please feel free to change\nanything you want.",
+                           theme = tm)
+plot(p)
+
+if(!file.exists(file.path(resultFolder,"diagnostics"))) dir.create(file.path(resultFolder,"diagnostics"))
+
+ggsave(file.path(resultFolder, "diagnostics", sprintf("diagnostics_%s.png", comparatorAbbreviation)),
+       p,
+       width = 32, height = 12, units = "cm", dpi = 200)
+ggsave(file.path(resultFolder, "diagnostics", sprintf("diagnostics_%s.pdf", comparatorAbbreviation)),
+       p,
+       width = 32, height = 12, units = "cm")
+
+
+####FQ vs CPH
+comparatorAbbreviation <- "CPH"
+cmResultOfInt <- cmResult %>% filter(analysisId ==2,
+                                     outcomeId == 1782489,
+                                     targetId == 1782488001,
+                                     comparatorId == 1782487001) ##CPH
+comparatorColor = colorCPH #"#dba6bd" #"#f6eff7", "#d0d1e6", "#a6bddb", "#67a9cf"
+cmResultOfInt$`HR (95% CI)`<- gsub("-     ","-",cmResultOfInt$`HR (95% CI)`) #Remove space
+
+#Rename columns
+cmResultOfInt <- cmResultOfInt %>%
+  rename(Source = cdmSourceAbbreviation) %>%
+  rename(FQ = targetIncidence)
+
+colnames(cmResultOfInt)[colnames(cmResultOfInt)=="comparatorIncidence"] <- comparatorAbbreviation # rlang::ensym(comparatorAbbreviation)
+
+equipoiseAlpha <- (cmResultOfInt$equipoise)/2 #dividing by 2 to make brighter
+equipoiseAlpha[is.na(equipoiseAlpha)]<-0 #replace NA with 0
+
+tm <- forestploter::forest_theme(core=list(
+  # fg_params=list(hjust=c(1, 0, 0, 0.5),
+  #                                                         x=c(0.9, 0.1, 0, 0.5)),
+  bg_params=list(fill = comparatorColor, #"#f6eff7", "#d0d1e6", "#a6bddb", "#67a9cf"
+                 alpha = equipoiseAlpha
+  ))
+  ,
+  colhead=list(fg_params=list(hjust=c(1, 0, 0, 0, 0.5),
+                              x=c(0.9, 0.1, 0, 0, 0.5)))
+)
+
+cmResultOfInt <- cmResultOfInt %>%
+  mutate(targetIncidence = gsub("-","<",format(round(targetOutcomes/(targetDays/365.25)*1000,2), nsmall=2))) %>%
+  mutate(comparatorIncidence = gsub("-","<",format(round(comparatorOutcomes/(comparatorDays/365.25)*1000,2), nsmall=2)))
+
+cmResultOfInt$` ` <- paste(rep(" ", 20), collapse = " ")
+
+p <- forestploter::forest (cmResultOfInt[,c("Source", "Matched(n)", "FQ", comparatorAbbreviation," ","HR (95% CI)","Max SDM","PS overlap","EASE", "Diagnostics")], #
+                           est = cmResultOfInt$calibratedRr,
+                           lower = cmResultOfInt$calibratedCi95Lb,
+                           upper = cmResultOfInt$calibratedCi95Ub,
+                           # sizes = (log(cmResultOfInt$calibratedCi95Ub) - log(cmResultOfInt$calibratedCi95Lb))/1.96,
+                           ci_column = 5,
+                           ref_line = 1,
+                           arrow_lab = c("Favors FQ", sprintf("Favors %s",comparatorAbbreviation)),
+                           xlim = c(0.5, 2),
+                           ticks_at = c(0.5, 1, 2),
+                           x_trans = "log",
+                           # footnote = "This is the demo data. Please feel free to change\nanything you want.",
+                           theme = tm)
+plot(p)
+
+ggsave(file.path(resultFolder, "diagnostics", sprintf("diagnostics_%s.png", comparatorAbbreviation)),
+       p,
+       width = 32, height = 12, units = "cm", dpi = 200)
+ggsave(file.path(resultFolder, "diagnostics", sprintf("diagnostics_%s.pdf", comparatorAbbreviation)),
+       p,
+       width = 32, height = 12, units = "cm")
+
+# ggsave(file.path(resultFolder, "diagnostics", sprintf("diagnostics_%s.png", comparatorAbbreviation)),p)
+
+
+####Meta-analysis from OHDSI server####
+result <- sosPullTable(connection = connection,
+                       resultsSchema = resultsSchema,
+                       targetTable = "es_cm_result", #"cd_cohort"
+                       limit = 0)
+cmResult <- sosPullTable(connection = connection,
+                         resultsSchema = resultsSchema,
+                         targetTable = "cm_result", #"cd_cohort"
+                         limit = 0)
+esCmResult <- sosPullTable(connection = connection,
+                           resultsSchema = resultsSchema,
+                           targetTable = "es_cm_result", #"cd_cohort"
+                           limit = 0)
+
+cmDiagnostics <- sosPullTable(connection = connection,
+                              resultsSchema = resultsSchema,
+                              targetTable = "cm_diagnostics_summary", #"cd_cohort"
+                              limit = 0)
+esCmDiagnostics <- sosPullTable(connection = connection,
+                                resultsSchema = resultsSchema,
+                                targetTable = "es_cm_diagnostics_summary", #"cd_cohort"
+                                limit = 0)
+
+cmResult <- cmResult %>% left_join(cmDiagnostics, by = c("analysisId", "targetId", "comparatorId", "outcomeId", "databaseId"))
+esCmResult <- esCmResult %>% left_join(esCmDiagnostics, by = c("analysisId", "targetId", "comparatorId", "outcomeId", "evidenceSynthesisAnalysisId"))
+
+combiResult <- bind_rows(cmResult, esCmResult)%>%
+  mutate(evidenceSynthesisAnalysisId = ifelse(is.na(evidenceSynthesisAnalysisId), 0, evidenceSynthesisAnalysisId)) #replace NA value in `evidenceSynthesisAnalysisId` to 0
+
+# write.csv(combiResult, file.path(resultFolder,"combined_result.csv"))
+
+
+####Forest plot####
+# https://cran.r-hub.io/web/packages/forestplot/vignettes/forestplot.html
+# devtools::install_github("cran/forestplot", ref = '2.0.1') #forest plot version 3.0 or higher requires R version 4.1 # install.packages("forestplot")#It's available for R 4.1
+####FQ vs TMP
+metaData <- combiResult %>% filter(analysisId ==2,
+                                   outcomeId == 1782489,
+                                   targetId == 1782488001,
+                                   comparatorId == 1782670001)##TMP
+comparatorAbbreviation <- "TMP"
+
+# add db names
+aggSingleResult <- metaData %>%
+  filter(evidenceSynthesisAnalysisId==0) %>%
+  filter (unblind == 1) %>% #only those passing diagnostics
+  left_join(dbTidy, by = "databaseId") %>%
+  arrange(dbOrder)
+
+summaryResult <- metaData %>%
+  filter(evidenceSynthesisAnalysisId  == 1) %>%
+  filter (unblind == 1)
+
+
+header <- tibble(study = c("", "Source"),
+                 targetIncidence = c("Event Rate", "FQ"),
+                 comparatorIncidence = c("", comparatorAbbreviation),
+                 HR = c("Hazard ratio", "(95% CI)"),
+                 summary = TRUE)
+
+
+metaResult <- tibble::tibble(mean  = aggSingleResult$calibratedRr,
+                             lower = aggSingleResult$calibratedCi95Lb,
+                             upper = aggSingleResult$calibratedCi95Ub,2,
+                             study = aggSingleResult$cdmSourceAbbreviation,
+                             targetIncidence = gsub("-","<",format(round(aggSingleResult$targetOutcomes/(aggSingleResult$targetDays/365.25)*1000,2), nsmall=2)),
+                             comparatorIncidence = gsub("-","<",format(round(aggSingleResult$comparatorOutcomes/(aggSingleResult$comparatorDays/365.25)*1000,2), nsmall=2)),
+                             HR = sprintf("%s(%s-%s)",
+                                          format(round(aggSingleResult$calibratedRr,2), nsmall =2 ),
+                                          format(round(aggSingleResult$calibratedCi95Lb,2), nsmall = 2),
+                                          format(round(aggSingleResult$calibratedCi95Ub,2), nsmall = 2)
+                             )
+)
+
+metaSummary <- tibble (mean  = summaryResult$calibratedRr,
+                       lower = summaryResult$calibratedCi95Lb,
+                       upper = summaryResult$calibratedCi95Ub,
+                       study = "Meta-analysis",
+                       targetIncidence = gsub("-","<",format(round(summaryResult$targetOutcomes/(summaryResult$targetDays/365.25)*1000,2), nsmall=2)),
+                       comparatorIncidence = gsub("-","<",format(round(summaryResult$comparatorOutcomes/(summaryResult$comparatorDays/365.25)*1000,2), nsmall=2)),
+                       HR = sprintf("%s(%s-%s)",
+                                    format(round(summaryResult$calibratedRr,2), nsmall =2 ),
+                                    format(round(summaryResult$calibratedCi95Lb,2), nsmall = 2),
+                                    format(round(summaryResult$calibratedCi95Ub,2), nsmall = 2)
+                       ),
+                       summary = TRUE)
+
+emptyRow <- tibble(mean = NA_real_)
+
+cochraneOutputDf <- bind_rows(header,
+                              metaResult,
+                              emptyRow,
+                              metaSummary)
+
+metaPlot <-cochraneOutputDf %>%
+  forestplot(labeltext = c(study, targetIncidence, comparatorIncidence, HR),
+             is.summary = summary,
+             clip = c(0.1, 2.5),
+             hrzl_lines = list("3" = gpar(lty = 2),
+                               "11" = gpar(lwd = 1, columns = 1:4, col = "#000044")),
+             xlog = TRUE,
+             col = fpColors(box = "royalblue",
+                            line = "darkblue",
+                            summary = "royalblue",
+                            hrz_lines = "#444444"))
+
+metaPlot
+# save plot
+png(file.path(resultFolder, "meta", sprintf("meta_analysis_%s.png", comparatorAbbreviation)),
+    width = 1000,height = 580#, res = 500
+)
+
+metaPlot
+
+dev.off()
+
+
+####FQ vs CPH
+metaData <- combiResult %>% filter(analysisId ==2,
+                                   outcomeId == 1782489,
+                                   targetId == 1782488001,
+                                   comparatorId == 1782487001) %>% ##CPH
+  filter (unblind == 1)
+comparatorAbbreviation <- "CPH"
+# add db names
+aggSingleResult <- metaData %>%
+  filter(evidenceSynthesisAnalysisId==0) %>%
+  left_join(dbTidy, by = "databaseId") %>%
+  arrange(dbOrder)
+
+summaryResult <- metaData %>% filter(evidenceSynthesisAnalysisId  == 1)
+
+
+header <- tibble(study = c("", "Source"),
+                 targetIncidence = c("Event Rate", "FQ"),
+                 comparatorIncidence = c("", comparatorAbbreviation),
+                 HR = c("Hazard ratio", "(95% CI)"),
+                 summary = TRUE)
+
+
+metaResult <- tibble::tibble(mean  = aggSingleResult$calibratedRr,
+                             lower = aggSingleResult$calibratedCi95Lb,
+                             upper = aggSingleResult$calibratedCi95Ub,2,
+                             study = aggSingleResult$cdmSourceAbbreviation,
+                             targetIncidence = gsub("-","<",format(round(aggSingleResult$targetOutcomes/(aggSingleResult$targetDays/365.25)*1000,2), nsmall=2)),
+                             comparatorIncidence = gsub("-","<",format(round(aggSingleResult$comparatorOutcomes/(aggSingleResult$comparatorDays/365.25)*1000,2), nsmall=2)),
+                             HR = sprintf("%s(%s-%s)",
+                                          format(round(aggSingleResult$calibratedRr,2), nsmall =2 ),
+                                          format(round(aggSingleResult$calibratedCi95Lb,2), nsmall = 2),
+                                          format(round(aggSingleResult$calibratedCi95Ub,2), nsmall = 2)
+                             )
+)
+
+metaSummary <- tibble (mean  = summaryResult$calibratedRr,
+                       lower = summaryResult$calibratedCi95Lb,
+                       upper = summaryResult$calibratedCi95Ub,
+                       study = "Meta-analysis",
+                       targetIncidence = gsub("-","<",format(round(summaryResult$targetOutcomes/(summaryResult$targetDays/365.25)*1000,2), nsmall=2)),
+                       comparatorIncidence = gsub("-","<",format(round(summaryResult$comparatorOutcomes/(summaryResult$comparatorDays/365.25)*1000,2), nsmall=2)),
+                       HR = sprintf("%s(%s-%s)",
+                                    format(round(summaryResult$calibratedRr,2), nsmall =2 ),
+                                    format(round(summaryResult$calibratedCi95Lb,2), nsmall = 2),
+                                    format(round(summaryResult$calibratedCi95Ub,2), nsmall = 2)
+                       ),
+                       summary = TRUE)
+
+emptyRow <- tibble(mean = NA_real_)
+
+cochraneOutputDf <- bind_rows(header,
+                              metaResult,
+                              emptyRow,
+                              metaSummary)
+
+metaPlot <-cochraneOutputDf %>%
+  forestplot(labeltext = c(study, targetIncidence, comparatorIncidence, HR),
+             is.summary = summary,
+             clip = c(0.1, 2.5),
+             hrzl_lines = list("3" = gpar(lty = 2),
+                               "11" = gpar(lwd = 1, columns = 1:4, col = "#000044")),
+             xlog = TRUE,
+             col = fpColors(box = "royalblue",
+                            line = "darkblue",
+                            summary = "royalblue",
+                            hrz_lines = "#444444"))
+
+#par()
+# save plot
+png(file.path(resultFolder, "meta", sprintf("meta_analysis_%s.png", comparatorAbbreviation)),
+    width = 1000,height = 580#, res = 500
+)
+
+metaPlot
+
+dev.off()
+
