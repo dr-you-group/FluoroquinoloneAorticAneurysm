@@ -546,7 +546,7 @@ for (i in seq(nrow(resultListForSurvival))){
                       yLabel = "Cumulative Incidence (%)",
                       title = sprintf("%s vs %s in %s ", targetName, comparatorName, databaseName))
 
-if(!file.exists(file.path(resultFolder,"kmplot"))) dir.create(file.path(resultFolder,"kmplot"))
+  if(!file.exists(file.path(resultFolder,"kmplot"))) dir.create(file.path(resultFolder,"kmplot"))
   ggplot2::ggsave(file.path(resultFolder,"kmplot",sprintf("km_plot_%s_t%s_c%s_o%d_a%d.png",
                                                           databaseName,
                                                           targetName,
@@ -583,13 +583,13 @@ excludingDbs <- c("German DA(DE)", "LPD Begium(BE)", "LPD Italy(IT)")
 
 #redundant
 result <- sosPullTable(connection = connection,
-                         resultsSchema = resultsSchema,
-                         targetTable = "cm_result", #"cd_cohort"
-                         limit = 0)
-cmDiagnostics <- sosPullTable(connection = connection,
                        resultsSchema = resultsSchema,
-                       targetTable = "cm_diagnostics_summary", #"cd_cohort"
+                       targetTable = "cm_result", #"cd_cohort"
                        limit = 0)
+cmDiagnostics <- sosPullTable(connection = connection,
+                              resultsSchema = resultsSchema,
+                              targetTable = "cm_diagnostics_summary", #"cd_cohort"
+                              limit = 0)
 
 cmResult <- result %>% left_join(cmDiagnostics, by = c("analysisId", "targetId", "comparatorId", "outcomeId", "databaseId"))
 cmResult <- cmResult %>%
@@ -783,7 +783,6 @@ combiResult <- bind_rows(cmResult, esCmResult)%>%
 
 # write.csv(combiResult, file.path(resultFolder,"combined_result.csv"))
 
-
 ####Forest plot####
 # https://cran.r-hub.io/web/packages/forestplot/vignettes/forestplot.html
 # devtools::install_github("cran/forestplot", ref = '2.0.1') #forest plot version 3.0 or higher requires R version 4.1 # install.packages("forestplot")#It's available for R 4.1
@@ -947,3 +946,68 @@ metaPlot
 
 dev.off()
 
+####Negative control outcomes####
+targetId = targetIdPrime
+comparatorId = comparatorIdPrime
+outcomeId = outcomeIdPrime
+analysisId = analysisIdPrime
+databaseId = "Meta-analysis"
+
+esCmResult <- sosPullTable(connection = connection,
+                           resultsSchema = resultsSchema,
+                           targetTable = "es_cm_result", #"cd_cohort"
+                           limit = 0)
+
+controlResults <- esCmResult %>%
+  filter(targetId %in% tcoTidy$targetId) %>%
+  filter(comparatorId %in% tcoTidy$comparatorId) %>%
+  filter(analysisId %in% analysisIdPrime) %>%
+  filter(evidenceSynthesisAnalysisId == 1)
+
+##define effect size
+controlResults$effectSize <- NA
+#identify negative control outcome ids
+idx <- !controlResults$outcomeId %in% unique(tcoTidy$outcomeId)
+
+controlResults$effectSize[idx] <- 1
+positiveControlOutcome = NULL
+
+if (!is.null(positiveControlOutcome)) {
+  idx <- controlResults$outcomeId %in% positiveControlOutcome$outcomeId
+  controlResults$effectSize[idx] <- positiveControlOutcome$effectSize[match(results$outcomeId[idx],
+                                                                            positiveControlOutcome$outcomeId)]
+}
+controlResults <- controlResults[!is.na(controlResults$effectSize), ]
+
+for (comparatorIdInd in unique(tcoTidy$comparatorId)){
+  controlResultsInd <- controlResults %>% filter(comparatorId == comparatorIdInd)
+
+  comparatorAbbreviation <- tcoTidy$comparatorAbbreviation[tcoTidy$comparatorId==comparatorIdInd][1]
+  targetAbbreviation <- tcoTidy$targetAbbreviation[tcoTidy$comparatorId==comparatorIdInd][1]
+  comparatorColorR <- tcoTidy$comparatorColorR[tcoTidy$comparatorId==comparatorIdInd][1]
+  comparatorColorG <- tcoTidy$comparatorColorG[tcoTidy$comparatorId==comparatorIdInd][1]
+  comparatorColorB <- tcoTidy$comparatorColorB[tcoTidy$comparatorId==comparatorIdInd][1]
+  analysisIdInd <- analysisIdPrime #only primary analysis
+
+  systematicErrorPlot <- plotScatter(controlResultsInd) +
+    ggtitle(sprintf("Systematic error control in %s vs %s",targetAbbreviation,comparatorAbbreviation)) +
+    theme(plot.title = element_text(hjust = 0.5)) +
+    geom_point(color=rgb(comparatorColorR,comparatorColorG,comparatorColorB))
+
+  if(!file.exists(file.path(resultFolder,"systematic_error"))) dir.create(file.path(resultFolder,"systematic_error"))
+  ggplot2::ggsave(file.path(resultFolder,"systematic_error",sprintf("systematic_error_plot_t%s_c%s_a%s.png",
+                                                                    targetAbbreviation,
+                                                                    comparatorAbbreviation,
+                                                                    analysisIdInd)),
+                  systematicErrorPlot, device = "png", width = 30, height = 20, units = "cm", dpi = 200)
+
+
+  controlResultsInd <- controlResultsInd %>%
+    mutate(pSignificant = controlResultsInd$p<0.05) %>%
+    mutate(calibratedPSignificant = controlResultsInd$calibratedP<0.05)
+
+  write.csv(controlResultsInd, file.path(resultFolder,"systematic_error",sprintf("systematic_error_plot_t%s_c%s_a%s.csv",
+                                                                                 targetAbbreviation,
+                                                                                 comparatorAbbreviation,
+                                                                                 analysisIdInd)))
+}
