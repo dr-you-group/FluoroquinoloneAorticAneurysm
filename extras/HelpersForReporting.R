@@ -622,3 +622,86 @@ plotScatter <- function(controlResults,
 
   return(plot)
 }
+
+#Two dimensional plot
+gridForest <- function(results, breaks = c(0.9,1,1.1,1.2),
+                       outlierMoverLower= 0.03,outlierMoverUpper= 0.1,
+                       outlierMoverUse = T,
+                       xLimits=c(0.85,1.3),
+                       varX = "outcomeName",
+                       varY = "TAR",
+                       # cols = NULL,
+                       xLab = "Definition of the Outcomes",
+                       yLab = "Hazard Ratio (95% Confidence Interval)"){
+  #hrExpression<-expression("Hazard Ratio (95% Confidence Interval) \n Favor Clopidogrel     Favor Tiacgrelor")
+  hrExpression <- yLab
+  shapeValue = c(17,21)#shape for closed and open center
+  # if(is.null(cols)) cols = as.numeric(results$axis0)
+  if (min(as.numeric(results$Significance))==2) shapeValue = c(21,17)
+  if(outlierMoverUse){
+    resultPlot<-ggplot2::ggplot(data=results,
+                                aes(x = axis0,y = rr, ymin =  ci95Lb, ymax = ci95Ub, shape =  Significance))+
+      ggplot2::geom_pointrange(aes(col = axis0, shape=Significance), size = 0.6
+      )+
+      scale_shape_manual(values=shapeValue)+ #shape for closed and open center
+      geom_hline(yintercept=1, linetype="dotted")+
+      #ggplot2::geom_hline(aes(fill=axis0),yintercept =1, linetype=2)+
+      xlab(xLab)+ ylab(hrExpression)+
+      ggplot2::geom_errorbar(aes(ymin=ci95Lb, ymax=ci95Ub,col=axis0),width=0.2,cex=1) +
+      geom_segment(aes(x = axis0, xend = axis0, y = rr, yend = rr - ci95LbOut-outlierMoverLower,col=axis0),
+                   arrow = ggplot2::arrow(angle=45,
+                                          unit (0.3,"cm")),
+                   size=1, show.legend=FALSE, na.rm = T)+
+      geom_segment(aes(x = axis0, xend = axis0, y = rr, yend = rr - ci95UbOut+outlierMoverUpper,col=axis0),
+                   arrow = ggplot2::arrow(angle=45,
+                                          unit (0.3,"cm")),
+                   size=1, show.legend=FALSE, na.rm = T)+
+      ggplot2::facet_grid(as.formula(paste0(varX,"~",varY)))+
+      #facet_wrap(~matching,strip.position="left",nrow=9,scales = "free_y") +
+      ggplot2::theme(plot.title=element_text(size=18,face="bold"),
+                     axis.text.y=element_blank(),
+                     axis.ticks.y=element_blank(),
+                     axis.text.x=element_text(face="bold"),
+                     axis.title=element_text(size=18,face="bold"),
+                     strip.text.y = element_text(hjust=0,vjust = 1,angle=180,face="bold"),
+                     strip.text.x = element_blank()
+      )+
+      ggplot2::coord_flip(ylim = xLimits)+scale_y_continuous(trans='log10', breaks = breaks
+      )+
+      ggplot2::theme_bw()+
+      ggplot2::theme(axis.text.y=element_blank(),
+                     panel.grid.major.y = element_blank(),
+                     axis.ticks.y=element_blank())+
+      scale_x_discrete(limits=rev(levels(results$axis0))) +
+      scale_fill_brewer(palette = "Greens")
+  }else{
+    resultPlot<-ggplot2::ggplot(data=results,
+                                aes(x = axis0,y = rr, ymin =  ci95Lb, ymax = ci95Ub, shape =  Significance))+
+      ggplot2::geom_pointrange(aes(col=axis0, shape=Significance), size = 0.6
+      )+
+      scale_shape_manual(values=shapeValue)+ #shape for closed and open center
+      geom_hline(yintercept=1, linetype="dotted")+
+      #ggplot2::geom_hline(aes(fill=axis0),yintercept =1, linetype=2)+
+      xlab(xLab)+ ylab(hrExpression)+
+      ggplot2::geom_errorbar(aes(ymin=ci95Lb, ymax=ci95Ub,col=axis0),width=0.2,cex=1) +
+
+      ggplot2::facet_grid(as.formula(paste0(varX,"~",varY)))+
+      #facet_wrap(~matching,strip.position="left",nrow=9,scales = "free_y") +
+      ggplot2::theme(plot.title=element_text(size=18,face="bold"),
+                     axis.text.y=element_blank(),
+                     axis.ticks.y=element_blank(),
+                     axis.text.x=element_text(face="bold"),
+                     axis.title=element_text(size=18,face="bold"),
+                     strip.text.y = element_text(hjust=0,vjust = 1,angle=180,face="bold"),
+                     strip.text.x = element_blank()
+      )+
+      ggplot2::coord_flip(ylim = xLimits)+scale_y_continuous(trans='log10', breaks = breaks
+      )+
+      ggplot2::theme_bw()+
+      ggplot2::theme(axis.text.y=element_blank(),
+                     panel.grid.major.y = element_blank(),
+                     axis.ticks.y=element_blank())+
+      scale_x_discrete(limits=rev(levels(results$axis0)))
+  }
+  return(resultPlot)
+}
