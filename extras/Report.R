@@ -22,8 +22,11 @@ library(ggsci)
 library(grid) #plotting diagnostics
 library(forestploter) #plotting diagnostics
 library(forestplot) # plotting meta-analysis
+library(gt) #diagnostics table
+library(scales) #diagnostics table
 # install.packages("jsonlite")
 # install.packages("ggplot2")
+# install.packages("webshot2") #to save gt table as an image
 
 # To install EvidenceSynthesis
 # system("sudo apt install cmake")
@@ -51,8 +54,12 @@ equipoiseBounds <- c(0.3,0.7)
 # scales::show_col(ggsci::pal_jama("default")(7))
 # scales::show_col(ggsci::pal_lancet("lanonc")(9))
 
-colorTarget <- ggsci::pal_jama("default")(7)[2]
-colorTMP <- ggsci::pal_jama("default")(7)[1]
+# colorTarget <- ggsci::pal_jama("default")(7)[2]
+# colorTMP <- ggsci::pal_jama("default")(7)[1]
+# colorCPH <- ggsci::pal_jama("default")(7)[5]
+
+colorTarget <- ggsci::pal_jama("default")(7)[4]
+colorTMP <- ggsci::pal_jama("default")(7)[2]
 colorCPH <- ggsci::pal_jama("default")(7)[5]
 
 targetColorR <- col2rgb(colorTarget)[1]/255#255/255
@@ -574,182 +581,395 @@ for (i in seq(nrow(resultListForSurvival))){
 }
 #####
 
-####Diagnostics plot####
-# https://cran.r-project.org/web/packages/forestploter/vignettes/forestploter-intro.html
-# https://github.com/cran/forestploter
-# https://youtu.be/reXmH_QyOio?si=ku9j_dmatkWBPP-F
-excludingDbs <- c("German DA(DE)", "LPD Begium(BE)", "LPD Italy(IT)")
-
-#redundant
-result <- sosPullTable(connection = connection,
-                       resultsSchema = resultsSchema,
-                       targetTable = "cm_result", #"cd_cohort"
-                       limit = 0)
+####Diagnostics table####
+###############
 cmDiagnostics <- sosPullTable(connection = connection,
                               resultsSchema = resultsSchema,
                               targetTable = "cm_diagnostics_summary", #"cd_cohort"
                               limit = 0)
+excludingDbs <- c("German DA(DE)", "LPD Begium(BE)", "LPD Italy(IT)")
 
-cmResult <- result %>% left_join(cmDiagnostics, by = c("analysisId", "targetId", "comparatorId", "outcomeId", "databaseId"))
-cmResult <- cmResult %>%
+diag <- cmDiagnostics %>%
   left_join(dbTidy, by = "databaseId") %>%
+  left_join(analysisTidy,
+            by = "analysisId") %>%
+  left_join(tcoTidy,
+            by = c("targetId", "comparatorId", "outcomeId")) %>%
+  mutate(diagnostics = ifelse(unblind, "PASS", "FAIL"))
+
+diag$comparatorAbbreviation <- factor(diag$comparatorAbbreviation, c("TMP", "CPH"))
+
+# Calculating ranks and normalizing them for the columns
+diagRanked <- diag %>%
+  # mutate(across(everything(), ~ rank(., na.last = FALSE, ties.method = "average"))) %>% #ranking (higher value is always lower [better] rank)
+  mutate(across(c(equipoise, attritionFraction), ~ rank(., na.last = "keep", ties.method = "average"))) %>% #ranking (higher value is always lower [better] rank)
+  mutate(across(c(maxSdm, mdrr, ease), ~ rank(., na.last = "keep", ties.method = "average"))) %>% #ranking (higher value is always lower [better] rank) NA value should have max rank
+  mutate(across(c(equipoise, attritionFraction), ~ (. - min(.,na.rm=T)) / (max(.,na.rm=T) - min(.,na.rm=T)))) %>% #higher values -> higher rank (PS overlap, attrition fraction)
+  mutate(across(c(maxSdm, mdrr, ease), ~ (max(.,na.rm=T) - . ) / (max(.,na.rm=T) - min(.,na.rm=T)))) %>% #lower values -> higher rank (Max SDM, MDRR, EASE)
+  # mutate(across(everything(), ~ replace_na(.,0))) #replace all NA values with 0
+  mutate(across(c(equipoise, attritionFraction,maxSdm, mdrr, ease), ~ replace_na(.,0))) #replace all NA values with 0
+
+diagPass <- diag %>%
+  mutate(maxSdm = balanceDiagnostic) %>%
+  mutate(equipoise = equipoiseDiagnostic) %>%
+  mutate(mdrr = mdrrDiagnostic) %>%
+  mutate(attritionFraction = attritionDiagnostic) %>%
+  mutate(ease = easeDiagnostic)
+
+get_pass <- function(x) {
+  if(is.na(x)){
+    textColor = 'red' #'gray'
+  } else{
+    if(x == "PASS") textColor = 'black'
+    if(x == "FAIL") textColor = 'red' #'gray'
+    if(x == "NOT EVALUATED") textColor = 'red' #'gray'
+  }
+  return(textColor)
+}
+
+diagPrime <- diag %>%
+  filter(isPrimaryAnalysis == 1) %>%
+  filter(isPrimaryTco == 1) %>%
+  filter(!(.data$cdmSourceAbbreviation %in% excludingDbs)) %>%
+  arrange(dbOrder) #%>% arrange(comparatorId)
+
+
+
+diagRankedPrime <- diagRanked %>%
+  filter(isPrimaryAnalysis == 1) %>%
+  filter(isPrimaryTco == 1) %>%
+  filter(!(.data$cdmSourceAbbreviation %in% excludingDbs)) %>%
+  arrange(dbOrder) #%>% arrange(comparatorId)
+
+diagPassPrime <- diagPass %>%
+  filter(isPrimaryAnalysis == 1) %>%
+  filter(isPrimaryTco == 1) %>%
+  filter(!(.data$cdmSourceAbbreviation %in% excludingDbs)) %>%
+  arrange(dbOrder) #%>% arrange(comparatorId)
+
+diagPrimeTidy <- diagPrime %>%
+  # filter(.data$comparatorId == !!comparatorId) %>%
+  filter(!(.data$cdmSourceAbbreviation %in% excludingDbs)) %>%
   arrange(dbOrder)
 
-#exclude results from excluding dbs
-cmResult <- cmResult %>% filter(!(cdmSourceAbbreviation %in% excludingDbs))
+diagRankedPrimeTidy <- diagRankedPrime %>%
+  # filter(.data$comparatorId == !!comparatorId) %>%
+  filter(!(.data$cdmSourceAbbreviation %in% excludingDbs)) %>%
+  arrange(dbOrder)
 
-cmResult <- cmResult %>%
-  mutate(targetIncidence = gsub("-","<",format(round(targetOutcomes/(targetDays/365.25)*1000,2), nsmall=2))) %>%
-  mutate(comparatorIncidence = gsub("-","<",format(round(comparatorOutcomes/(comparatorDays/365.25)*1000,2), nsmall=2)))
+diagPassPrimeTidy <- diagPassPrime %>%
+  # filter(.data$comparatorId == !!comparatorId) %>%
+  filter(!(.data$cdmSourceAbbreviation %in% excludingDbs)) %>%
+  arrange(dbOrder)
 
-cmResult <- cmResult %>%
-  mutate(`Max SDM` = format(round(sharedMaxSdm,2), nsmall=2)) %>%
-  mutate(`PS overlap` = format(round(equipoise,2), nsmall=2)) %>%
-  mutate(`EASE` = format(round(ease,2), nsmall=2)) %>%
-  mutate(`HR (95% CI)` = paste0(format(round(calibratedRr,2), nsmall=2),
-                                "(",
-                                format(round(calibratedCi95Lb,2),  nsmall=2),
-                                "-",
-                                format(round(calibratedCi95Ub,2), nsmall=2),
-                                ")"
+
+# Creating the gt table with the combined data
+gt_table <- diagPrimeTidy %>%
+  select(cdmSourceAbbreviation, maxSdm, equipoise, mdrr, attritionFraction, ease, diagnostics,comparatorAbbreviation) %>%
+  gt()
+
+for (comparatorId in unique(diagPrimeTidy$comparatorId)){
+  comparatorColor <- diagPrimeTidy %>%
+    filter(.data$comparatorId == !! comparatorId) %>%
+    select(comparatorColorR, comparatorColorG, comparatorColorB) %>%
+    unique() %>% slice (1)
+  # comparatorColor <- comparatorColor * 0.7
+
+  # Create a color palette function
+  get_color <- function(x) {
+    col_numeric(palette = c("white", rgb(comparatorColor)), domain = c(0, 1))(x)
+  }
+  # Apply the background colors to each cell of the colored columns
+  colored_column_names <- c("maxSdm", "equipoise", "mdrr", "attritionFraction", "ease")
+  for (col_name in colored_column_names) {
+    for (i in seq_along(diagRankedPrimeTidy[[col_name]])) {
+      if(diagRankedPrimeTidy$comparatorId[i] == comparatorId){
+        gt_table <- gt_table %>%
+          tab_style(
+            style = cell_fill(color = get_color(diagRankedPrimeTidy[[col_name]][i])),
+            locations = cells_body(
+              columns = vars(!!sym(col_name)),
+              rows = i
+            )
+          )
+      }
+    }
+  }
+}
+
+pass_column_names <- c("maxSdm", "equipoise", "mdrr", "attritionFraction", "ease")
+for (col_name in pass_column_names) {
+  for (i in seq_along(diagPassPrimeTidy[[col_name]])) {
+    gt_table <- gt_table %>%
+      tab_style(
+        style = cell_text(color = get_pass(diagPassPrimeTidy[[col_name]][i])),
+        locations = cells_body(
+          columns = vars(!!sym(col_name)),
+          rows = i
+        )
+      )
+  }
+}
+
+
+gt_table <- gt_table %>%
+  ##Rename each column##
+  cols_label(
+    cdmSourceAbbreviation	 = "CDM Source",
+    maxSdm = "Balance",
+    equipoise	 = "Equipoise",
+    mdrr = "Power",
+    attritionFraction	 = "Generalizability",
+    ease = "Systematic Bias",
+    diagnostics = "All Diagnostics"
+  ) %>%
+  #Rename each column
+  tab_style(
+    style = cell_text(color = "red"),
+    locations = cells_body(
+      columns = c(diagnostics),
+      rows = diagnostics == "FAIL"
+    )
   )
+
+gt_table_modified <- gt_table %>%
+  fmt_number(columns = everything(),
+             decimals = 3) %>%
+  cols_align(align = "right",
+             columns = c(diagnostics)) %>%
+  cols_width(cdmSourceAbbreviation ~ px(180),
+             everything()~px(140)) %>%
+  tab_footnote(
+    footnote = "estimated by max standardized difference of mean",
+    locations = cells_column_labels(columns = maxSdm)
+  ) %>%
+  tab_footnote(
+    footnote = "estimated by overlap of preference score distribution",
+    locations = cells_column_labels(columns = equipoise)
+  ) %>%
+  tab_footnote(
+    footnote = "estimated by max detectable relative risk",
+    locations = cells_column_labels(columns = mdrr)
+  ) %>%
+  tab_footnote(
+    footnote = "estimated by attrition fraction",
+    locations = cells_column_labels(columns = attritionFraction)
+  ) %>%
+  tab_footnote(
+    footnote = "estimated by expected absolute systematic error (EASE)",
+    locations = cells_column_labels(columns = ease)
+  ) %>%
+  tab_source_note(source_note = md(
+    "Shadow indicates robustness of each diagnostics. Red color means the cell did not pass the diagnostics")) %>%
+  tab_source_note(source_note = md(
+    "Abbreviations")) %>%
+  opt_footnote_marks(marks = "letters") %>%
+  ## grouping ##
+  tab_row_group(
+    label = md("FQ vs CPH"),
+    rows = comparatorAbbreviation == "CPH"
+  ) %>%
+  tab_row_group(
+    label = md("FQ vs TMP"),
+    rows = comparatorAbbreviation == "TMP"
+  ) %>%
+  cols_hide (columns = comparatorAbbreviation) %>% #hide column indicating comparator
+  # tab_options(row_group.background.color = '#d3d3d3') %>%  #light gray for grouping rows
+  tab_style(
+    style = list(
+      cell_text(align = "center")
+    ),
+    locations = cells_row_groups(groups = everything())
   )
-cmResult$`Diagnostics` <- ifelse(cmResult$unblind, "PASS", "FAIL")
-cmResult$`Matched(n)` <- format(cmResult$targetSubjects, trim = F, big.mark = " ")
-
-
-# diagnosticsList <- cmDiagnostics %>%
-#   left_join(dbTidy,
-#             by = "databaseId") %>%
-#   left_join(analysisTidy,
-#             by = "analysisId") %>%
-#   left_join(tcoTidy,
-#             by = c("targetId", "comparatorId", "outcomeId")
-#   ) %>%
-#   filter(isPrimaryAnalysis == 1) %>%
-#   filter(isPrimaryTco == 1)
-
-####FQ vs TMP
-comparatorAbbreviation <- "TMP"
-cmResultOfInt <- cmResult %>% filter(analysisId ==2,
-                                     outcomeId == 1782489,
-                                     targetId == 1782488001,
-                                     comparatorId == 1782670001) ##TMP
-comparatorColor = colorTMP#"#a6bddb"
-cmResultOfInt$`HR (95% CI)`<- gsub("-      ","-",cmResultOfInt$`HR (95% CI)`) #Remove space
-
-#Rename columns
-cmResultOfInt <- cmResultOfInt %>%
-  rename(Source = cdmSourceAbbreviation) %>%
-  rename(FQ = targetIncidence)
-
-colnames(cmResultOfInt)[colnames(cmResultOfInt)=="comparatorIncidence"] <- comparatorAbbreviation # rlang::ensym(comparatorAbbreviation)
-
-equipoiseAlpha <- (cmResultOfInt$equipoise)/2 #dividing by 2 to make brighter
-equipoiseAlpha[is.na(equipoiseAlpha)]<-0 #replace NA with 0
-
-tm <- forestploter::forest_theme(core=list(
-  # fg_params=list(hjust=c(1, 0, 0, 0.5),
-  #                                                         x=c(0.9, 0.1, 0, 0.5)),
-  bg_params=list(fill = comparatorColor, #"#f6eff7", "#d0d1e6", "#a6bddb", "#67a9cf"
-                 alpha = equipoiseAlpha
-  ))
-  ,
-  colhead=list(fg_params=list(hjust=c(1, 0, 0, 0, 0.5),
-                              x=c(0.9, 0.1, 0, 0, 0.5)))
-)
-
-cmResultOfInt <- cmResultOfInt %>%
-  mutate(targetIncidence = gsub("-","<",format(round(targetOutcomes/(targetDays/365.25)*1000,2), nsmall=2))) %>%
-  mutate(comparatorIncidence = gsub("-","<",format(round(comparatorOutcomes/(comparatorDays/365.25)*1000,2), nsmall=2)))
-
-cmResultOfInt$` ` <- paste(rep(" ", 20), collapse = " ")
-
-p <- forestploter::forest (cmResultOfInt[,c("Source", "Matched(n)", "FQ", comparatorAbbreviation," ","HR (95% CI)","Max SDM","PS overlap","EASE", "Diagnostics")], #
-                           est = cmResultOfInt$calibratedRr,
-                           lower = cmResultOfInt$calibratedCi95Lb,
-                           upper = cmResultOfInt$calibratedCi95Ub,
-                           # sizes = (log(cmResultOfInt$calibratedCi95Ub) - log(cmResultOfInt$calibratedCi95Lb))/1.96,
-                           ci_column = 5,
-                           ref_line = 1,
-                           arrow_lab = c("Favors FQ", sprintf("Favors %s",comparatorAbbreviation)),
-                           xlim = c(0.5, 2),
-                           ticks_at = c(0.5, 1, 2),
-                           x_trans = "log",
-                           # footnote = "This is the demo data. Please feel free to change\nanything you want.",
-                           theme = tm)
-plot(p)
 
 if(!file.exists(file.path(resultFolder,"diagnostics"))) dir.create(file.path(resultFolder,"diagnostics"))
+saveRDS(gt_table_modified, file.path(resultFolder, "diagnostics", sprintf("diagnostics_table.RDS")))
+gt_table_modified %>% gtsave(file.path(resultFolder, "diagnostics", sprintf("diagnostics_table.png")), expand = 10)
+gt_table_modified %>% gtsave(file.path(resultFolder, "diagnostics", sprintf("diagnostics_table.html")))
+gt_table_modified %>% gtsave(file.path(resultFolder, "diagnostics", sprintf("diagnostics_table.tex")))
+gt_table_modified %>% gtsave(file.path(resultFolder, "diagnostics", sprintf("diagnostics_table.rtf")))
+gt_table_modified %>% gtsave(file.path(resultFolder, "diagnostics", sprintf("diagnostics_table.pdf")))
+gt_table_modified %>% gtsave(file.path(resultFolder, "diagnostics", sprintf("diagnostics_table.docx")))
 
-ggsave(file.path(resultFolder, "diagnostics", sprintf("diagnostics_%s.png", comparatorAbbreviation)),
-       p,
-       width = 32, height = 12, units = "cm", dpi = 200)
-ggsave(file.path(resultFolder, "diagnostics", sprintf("diagnostics_%s.pdf", comparatorAbbreviation)),
-       p,
-       width = 32, height = 12, units = "cm")
 
+#################
 
-####FQ vs CPH
-comparatorAbbreviation <- "CPH"
-cmResultOfInt <- cmResult %>% filter(analysisId ==2,
-                                     outcomeId == 1782489,
-                                     targetId == 1782488001,
-                                     comparatorId == 1782487001) ##CPH
-comparatorColor = colorCPH #"#dba6bd" #"#f6eff7", "#d0d1e6", "#a6bddb", "#67a9cf"
-cmResultOfInt$`HR (95% CI)`<- gsub("-     ","-",cmResultOfInt$`HR (95% CI)`) #Remove space
-
-#Rename columns
-cmResultOfInt <- cmResultOfInt %>%
-  rename(Source = cdmSourceAbbreviation) %>%
-  rename(FQ = targetIncidence)
-
-colnames(cmResultOfInt)[colnames(cmResultOfInt)=="comparatorIncidence"] <- comparatorAbbreviation # rlang::ensym(comparatorAbbreviation)
-
-equipoiseAlpha <- (cmResultOfInt$equipoise)/2 #dividing by 2 to make brighter
-equipoiseAlpha[is.na(equipoiseAlpha)]<-0 #replace NA with 0
-
-tm <- forestploter::forest_theme(core=list(
-  # fg_params=list(hjust=c(1, 0, 0, 0.5),
-  #                                                         x=c(0.9, 0.1, 0, 0.5)),
-  bg_params=list(fill = comparatorColor, #"#f6eff7", "#d0d1e6", "#a6bddb", "#67a9cf"
-                 alpha = equipoiseAlpha
-  ))
-  ,
-  colhead=list(fg_params=list(hjust=c(1, 0, 0, 0, 0.5),
-                              x=c(0.9, 0.1, 0, 0, 0.5)))
-)
-
-cmResultOfInt <- cmResultOfInt %>%
-  mutate(targetIncidence = gsub("-","<",format(round(targetOutcomes/(targetDays/365.25)*1000,2), nsmall=2))) %>%
-  mutate(comparatorIncidence = gsub("-","<",format(round(comparatorOutcomes/(comparatorDays/365.25)*1000,2), nsmall=2)))
-
-cmResultOfInt$` ` <- paste(rep(" ", 20), collapse = " ")
-
-p <- forestploter::forest (cmResultOfInt[,c("Source", "Matched(n)", "FQ", comparatorAbbreviation," ","HR (95% CI)","Max SDM","PS overlap","EASE", "Diagnostics")], #
-                           est = cmResultOfInt$calibratedRr,
-                           lower = cmResultOfInt$calibratedCi95Lb,
-                           upper = cmResultOfInt$calibratedCi95Ub,
-                           # sizes = (log(cmResultOfInt$calibratedCi95Ub) - log(cmResultOfInt$calibratedCi95Lb))/1.96,
-                           ci_column = 5,
-                           ref_line = 1,
-                           arrow_lab = c("Favors FQ", sprintf("Favors %s",comparatorAbbreviation)),
-                           xlim = c(0.5, 2),
-                           ticks_at = c(0.5, 1, 2),
-                           x_trans = "log",
-                           # footnote = "This is the demo data. Please feel free to change\nanything you want.",
-                           theme = tm)
-plot(p)
-
-ggsave(file.path(resultFolder, "diagnostics", sprintf("diagnostics_%s.png", comparatorAbbreviation)),
-       p,
-       width = 32, height = 12, units = "cm", dpi = 200)
-ggsave(file.path(resultFolder, "diagnostics", sprintf("diagnostics_%s.pdf", comparatorAbbreviation)),
-       p,
-       width = 32, height = 12, units = "cm")
-
-# ggsave(file.path(resultFolder, "diagnostics", sprintf("diagnostics_%s.png", comparatorAbbreviation)),p)
-
+#### Diagnostic plot####
+# # https://cran.r-project.org/web/packages/forestploter/vignettes/forestploter-intro.html
+# # https://github.com/cran/forestploter
+# # https://youtu.be/reXmH_QyOio?si=ku9j_dmatkWBPP-F
+# excludingDbs <- c("German DA(DE)", "LPD Begium(BE)", "LPD Italy(IT)")
+#
+# #redundant
+# result <- sosPullTable(connection = connection,
+#                        resultsSchema = resultsSchema,
+#                        targetTable = "cm_result", #"cd_cohort"
+#                        limit = 0)
+# cmDiagnostics <- sosPullTable(connection = connection,
+#                               resultsSchema = resultsSchema,
+#                               targetTable = "cm_diagnostics_summary", #"cd_cohort"
+#                               limit = 0)
+#
+# cmResult <- result %>% left_join(cmDiagnostics, by = c("analysisId", "targetId", "comparatorId", "outcomeId", "databaseId"))
+# cmResult <- cmResult %>%
+#   left_join(dbTidy, by = "databaseId") %>%
+#   arrange(dbOrder)
+#
+# #exclude results from excluding dbs
+# cmResult <- cmResult %>% filter(!(cdmSourceAbbreviation %in% excludingDbs))
+#
+# cmResult <- cmResult %>%
+#   mutate(targetIncidence = gsub("-","<",format(round(targetOutcomes/(targetDays/365.25)*1000,2), nsmall=2))) %>%
+#   mutate(comparatorIncidence = gsub("-","<",format(round(comparatorOutcomes/(comparatorDays/365.25)*1000,2), nsmall=2)))
+#
+# cmResult <- cmResult %>%
+#   mutate(`Max SDM` = format(round(sharedMaxSdm,2), nsmall=2)) %>%
+#   mutate(`PS overlap` = format(round(equipoise,2), nsmall=2)) %>%
+#   mutate(`EASE` = format(round(ease,2), nsmall=2)) %>%
+#   mutate(`HR (95% CI)` = paste0(format(round(calibratedRr,2), nsmall=2),
+#                                 "(",
+#                                 format(round(calibratedCi95Lb,2),  nsmall=2),
+#                                 "-",
+#                                 format(round(calibratedCi95Ub,2), nsmall=2),
+#                                 ")"
+#   )
+#   )
+# cmResult$`Diagnostics` <- ifelse(cmResult$unblind, "PASS", "FAIL")
+# cmResult$`Matched(n)` <- format(cmResult$targetSubjects, trim = F, big.mark = " ")
+#
+#
+# # diagnosticsList <- cmDiagnostics %>%
+# #   left_join(dbTidy,
+# #             by = "databaseId") %>%
+# #   left_join(analysisTidy,
+# #             by = "analysisId") %>%
+# #   left_join(tcoTidy,
+# #             by = c("targetId", "comparatorId", "outcomeId")
+# #   ) %>%
+# #   filter(isPrimaryAnalysis == 1) %>%
+# #   filter(isPrimaryTco == 1)
+#
+# ####FQ vs TMP
+# comparatorAbbreviation <- "TMP"
+# cmResultOfInt <- cmResult %>% filter(analysisId ==2,
+#                                      outcomeId == 1782489,
+#                                      targetId == 1782488001,
+#                                      comparatorId == 1782670001) ##TMP
+# comparatorColor = colorTMP#"#a6bddb"
+# cmResultOfInt$`HR (95% CI)`<- gsub("-      ","-",cmResultOfInt$`HR (95% CI)`) #Remove space
+#
+# #Rename columns
+# cmResultOfInt <- cmResultOfInt %>%
+#   rename(Source = cdmSourceAbbreviation) %>%
+#   rename(FQ = targetIncidence)
+#
+# colnames(cmResultOfInt)[colnames(cmResultOfInt)=="comparatorIncidence"] <- comparatorAbbreviation # rlang::ensym(comparatorAbbreviation)
+#
+# equipoiseAlpha <- (cmResultOfInt$equipoise)/2 #dividing by 2 to make brighter
+# equipoiseAlpha[is.na(equipoiseAlpha)]<-0 #replace NA with 0
+#
+# tm <- forestploter::forest_theme(core=list(
+#   # fg_params=list(hjust=c(1, 0, 0, 0.5),
+#   #                                                         x=c(0.9, 0.1, 0, 0.5)),
+#   bg_params=list(fill = comparatorColor, #"#f6eff7", "#d0d1e6", "#a6bddb", "#67a9cf"
+#                  alpha = equipoiseAlpha
+#   ))
+#   ,
+#   colhead=list(fg_params=list(hjust=c(1, 0, 0, 0, 0.5),
+#                               x=c(0.9, 0.1, 0, 0, 0.5)))
+# )
+#
+# cmResultOfInt <- cmResultOfInt %>%
+#   mutate(targetIncidence = gsub("-","<",format(round(targetOutcomes/(targetDays/365.25)*1000,2), nsmall=2))) %>%
+#   mutate(comparatorIncidence = gsub("-","<",format(round(comparatorOutcomes/(comparatorDays/365.25)*1000,2), nsmall=2)))
+#
+# cmResultOfInt$` ` <- paste(rep(" ", 20), collapse = " ")
+#
+# p <- forestploter::forest (cmResultOfInt[,c("Source", "Matched(n)", "FQ", comparatorAbbreviation," ","HR (95% CI)","Max SDM","PS overlap","EASE", "Diagnostics")], #
+#                            est = cmResultOfInt$calibratedRr,
+#                            lower = cmResultOfInt$calibratedCi95Lb,
+#                            upper = cmResultOfInt$calibratedCi95Ub,
+#                            # sizes = (log(cmResultOfInt$calibratedCi95Ub) - log(cmResultOfInt$calibratedCi95Lb))/1.96,
+#                            ci_column = 5,
+#                            ref_line = 1,
+#                            arrow_lab = c("Favors FQ", sprintf("Favors %s",comparatorAbbreviation)),
+#                            xlim = c(0.5, 2),
+#                            ticks_at = c(0.5, 1, 2),
+#                            x_trans = "log",
+#                            # footnote = "This is the demo data. Please feel free to change\nanything you want.",
+#                            theme = tm)
+# plot(p)
+#
+# if(!file.exists(file.path(resultFolder,"diagnostics"))) dir.create(file.path(resultFolder,"diagnostics"))
+#
+# ggsave(file.path(resultFolder, "diagnostics", sprintf("diagnostics_%s.png", comparatorAbbreviation)),
+#        p,
+#        width = 32, height = 12, units = "cm", dpi = 200)
+# ggsave(file.path(resultFolder, "diagnostics", sprintf("diagnostics_%s.pdf", comparatorAbbreviation)),
+#        p,
+#        width = 32, height = 12, units = "cm")
+#
+#
+# ####FQ vs CPH
+# comparatorAbbreviation <- "CPH"
+# cmResultOfInt <- cmResult %>% filter(analysisId ==2,
+#                                      outcomeId == 1782489,
+#                                      targetId == 1782488001,
+#                                      comparatorId == 1782487001) ##CPH
+# comparatorColor = colorCPH #"#dba6bd" #"#f6eff7", "#d0d1e6", "#a6bddb", "#67a9cf"
+# cmResultOfInt$`HR (95% CI)`<- gsub("-     ","-",cmResultOfInt$`HR (95% CI)`) #Remove space
+#
+# #Rename columns
+# cmResultOfInt <- cmResultOfInt %>%
+#   rename(Source = cdmSourceAbbreviation) %>%
+#   rename(FQ = targetIncidence)
+#
+# colnames(cmResultOfInt)[colnames(cmResultOfInt)=="comparatorIncidence"] <- comparatorAbbreviation # rlang::ensym(comparatorAbbreviation)
+#
+# equipoiseAlpha <- (cmResultOfInt$equipoise)/2 #dividing by 2 to make brighter
+# equipoiseAlpha[is.na(equipoiseAlpha)]<-0 #replace NA with 0
+#
+# tm <- forestploter::forest_theme(core=list(
+#   # fg_params=list(hjust=c(1, 0, 0, 0.5),
+#   #                                                         x=c(0.9, 0.1, 0, 0.5)),
+#   bg_params=list(fill = comparatorColor, #"#f6eff7", "#d0d1e6", "#a6bddb", "#67a9cf"
+#                  alpha = equipoiseAlpha
+#   ))
+#   ,
+#   colhead=list(fg_params=list(hjust=c(1, 0, 0, 0, 0.5),
+#                               x=c(0.9, 0.1, 0, 0, 0.5)))
+# )
+#
+# cmResultOfInt <- cmResultOfInt %>%
+#   mutate(targetIncidence = gsub("-","<",format(round(targetOutcomes/(targetDays/365.25)*1000,2), nsmall=2))) %>%
+#   mutate(comparatorIncidence = gsub("-","<",format(round(comparatorOutcomes/(comparatorDays/365.25)*1000,2), nsmall=2)))
+#
+# cmResultOfInt$` ` <- paste(rep(" ", 20), collapse = " ")
+#
+# p <- forestploter::forest (cmResultOfInt[,c("Source", "Matched(n)", "FQ", comparatorAbbreviation," ","HR (95% CI)","Max SDM","PS overlap","EASE", "Diagnostics")], #
+#                            est = cmResultOfInt$calibratedRr,
+#                            lower = cmResultOfInt$calibratedCi95Lb,
+#                            upper = cmResultOfInt$calibratedCi95Ub,
+#                            # sizes = (log(cmResultOfInt$calibratedCi95Ub) - log(cmResultOfInt$calibratedCi95Lb))/1.96,
+#                            ci_column = 5,
+#                            ref_line = 1,
+#                            arrow_lab = c("Favors FQ", sprintf("Favors %s",comparatorAbbreviation)),
+#                            xlim = c(0.5, 2),
+#                            ticks_at = c(0.5, 1, 2),
+#                            x_trans = "log",
+#                            # footnote = "This is the demo data. Please feel free to change\nanything you want.",
+#                            theme = tm)
+# plot(p)
+#
+# ggsave(file.path(resultFolder, "diagnostics", sprintf("diagnostics_%s.png", comparatorAbbreviation)),
+#        p,
+#        width = 32, height = 12, units = "cm", dpi = 200)
+# ggsave(file.path(resultFolder, "diagnostics", sprintf("diagnostics_%s.pdf", comparatorAbbreviation)),
+#        p,
+#        width = 32, height = 12, units = "cm")
+#
+# # ggsave(file.path(resultFolder, "diagnostics", sprintf("diagnostics_%s.png", comparatorAbbreviation)),p)
+####################
 
 ####Meta-analysis from OHDSI server####
 cmResult <- sosPullTable(connection = connection,
