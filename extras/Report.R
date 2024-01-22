@@ -115,13 +115,11 @@ resultTableNames <- resultTables %>% pull(tableName)
 cmTableNames <- resultTables %>%
   filter(grepl("^cm",tableName)) %>%
   pull(tableName)
-cmTableNames
 
 #Filter only es tables
 esTableNames <- resultTables %>%
   filter(grepl("^es",tableName)) %>%
   pull(tableName)
-esTableNames
 
 ############################
 ####Tidy TCO, Analysis, DB list####
@@ -220,12 +218,6 @@ dbTidy<- dbTidy %>%
   arrange(cdmSourceAbbreviation, .by_group = TRUE)
 dbTidy$dbOrder <- 1:nrow(dbTidy)
 
-# results
-cmAttrition <- sosPullTable(connection = connection,
-                            resultsSchema = resultsSchema,
-                            targetTable = "cm_attrition",
-                            limit = 0)
-
 # Find Primary analysis
 analysis <- sosPullTable(connection = connection,
                          resultsSchema = resultsSchema,
@@ -261,6 +253,140 @@ resultList <- diagnosticsSummary %>%
             by = c("targetId", "comparatorId", "outcomeId")
   )
 ######################
+
+####Study Protocol####
+####For cohort definitions (json/sql)####
+# cohortDefinition <- sosPullTable(connection = connection,
+#                                  resultsSchema = resultsSchema,
+#                                  targetTable = "cg_cohort_definition", #"cd_cohort"
+#                                  limit = 0)
+#########################################
+####Negative control outcomes####
+analysisSpec <- jsonlite::fromJSON("./inst/analysisSpecification.json")
+negativeConOutcomes <- analysisSpec$sharedResources$negativeControlOutcomes$negativeControlOutcomeCohortSet[[2]][,c("outcomeConceptId", "cohortName")]
+
+if(!file.exists(file.path(resultFolder,"analysis"))) dir.create(file.path(resultFolder,"analysis"))
+write.csv(negativeConOutcomes, file.path(resultFolder, "analysis", "negative_control_list.csv"))
+
+#########################################
+####Attrition Summary and Inicdence rate####
+cmAttrition <- sosPullTable(connection = connection,
+                            resultsSchema = resultsSchema,
+                            targetTable = "cm_attrition",
+                            limit = 0)
+cmResult <- sosPullTable(connection = connection,
+                         resultsSchema = resultsSchema,
+                         targetTable = "cm_result", #"cd_cohort"
+                         limit = 0)
+# tcoTidy
+attritionPrime <- cmAttrition %>%
+  left_join(dbTidy, by = "databaseId") %>%
+  filter(analysisId == analysisIdPrime) %>%
+  filter(outcomeId == 1782489)
+
+
+## FQ vs TMP
+# Original cohorts (FQ)
+fq_fqtmp_orgin <- attritionPrime %>%
+  filter (comparatorId == 1782670001) %>%
+  filter (exposureId == 1782488001) %>%
+  filter (sequenceNumber == 1) %>%
+  arrange(dbOrder) %>%
+  select(subjects, dbOrder) %>%
+  rename(fq_fqtmp_orgin = subjects)
+
+# Original cohorts (TMP)
+tmp_fqtmp_orgin <- attritionPrime %>%
+  filter (comparatorId == 1782670001) %>%
+  filter (exposureId == 1782670001) %>%
+  filter (sequenceNumber == 1) %>%
+  arrange(dbOrder) %>%
+  select(subjects, dbOrder) %>%
+  rename(tmp_fqtmp_orgin = subjects)
+
+# Matched cohorts (FQ)
+fq_fqtmp_matched <- attritionPrime %>%
+  filter (comparatorId == 1782670001) %>%
+  filter (exposureId == 1782488001) %>%
+  filter (sequenceNumber == 6) %>%
+  left_join(cmResult, by = c("analysisId", "targetId", "comparatorId", "outcomeId", "databaseId")) %>%
+  arrange(dbOrder) %>%
+  select(subjects, dbOrder, targetSubjects, targetDays, targetOutcomes) %>%
+  mutate(fq_fqtmp_matched_incidence = targetOutcomes/targetDays) %>%
+  rename(fq_fqtmp_matched_subjects = subjects, fq_fqtmp_matched_subjects_cm = targetSubjects, fq_fqtmp_matched_days = targetDays, fq_fqtmp_matched_outcome = targetOutcomes)
+
+
+# Matched cohorts (TMP)
+tmp_fqtmp_matched <- attritionPrime %>%
+  filter (comparatorId == 1782670001) %>%
+  filter (exposureId == 1782670001) %>%
+  filter (sequenceNumber == 6) %>%
+  left_join(cmResult, by = c("analysisId", "targetId", "comparatorId", "outcomeId", "databaseId")) %>%
+  arrange(dbOrder) %>%
+  select(subjects, dbOrder, comparatorSubjects, comparatorDays, comparatorOutcomes) %>%
+  mutate(tmp_fqtmp_matched_incidence = comparatorOutcomes/comparatorDays) %>%
+  rename(tmp_fqtmp_matched = subjects, tmp_fqtmp_matched_subjects_cm = comparatorSubjects, tmp_fqtmp_matched_days = comparatorDays, tmp_fqtmp_matched_outcome = comparatorOutcomes)
+
+
+
+## FQ vs CPH
+# Original cohorts (FQ)
+fq_fqcph_orgin <- attritionPrime %>%
+  filter (comparatorId == 1782487001) %>%
+  filter (exposureId == 1782488001) %>%
+  filter (sequenceNumber == 1) %>%
+  arrange(dbOrder) %>%
+  select(subjects, dbOrder) %>%
+  rename(fq_fqcph_orgin = subjects)
+
+# Original cohorts (CPH)
+cph_fqcph_orgin <- attritionPrime %>%
+  filter (comparatorId == 1782487001) %>%
+  filter (exposureId == 1782487001) %>%
+  filter (sequenceNumber == 1) %>%
+  arrange(dbOrder) %>%
+  select(subjects, dbOrder) %>%
+  rename(cph_fqcph_orgin = subjects)
+
+# Matched cohorts (FQ)
+fq_fqcph_matched <- attritionPrime %>%
+  filter (comparatorId == 1782487001) %>%
+  filter (exposureId == 1782488001) %>%
+  filter (sequenceNumber == 6) %>%
+  left_join(cmResult, by = c("analysisId", "targetId", "comparatorId", "outcomeId", "databaseId")) %>%
+  arrange(dbOrder) %>%
+  select(subjects, dbOrder, targetSubjects, targetDays, targetOutcomes) %>%
+  mutate(fq_fqcph_matched_incidence = targetOutcomes/targetDays) %>%
+  rename(fq_fqcph_matched_subjects = subjects, fq_fqcph_matched_subjects_cm = targetSubjects, fq_fqcph_matched_days = targetDays, fq_fqcph_matched_outcome = targetOutcomes)
+
+# Matched cohorts (CPH)
+cph_fqcph_matched <- attritionPrime %>%
+  filter (comparatorId == 1782487001) %>%
+  filter (exposureId == 1782487001) %>%
+  filter (sequenceNumber == 6) %>%
+  left_join(cmResult, by = c("analysisId", "targetId", "comparatorId", "outcomeId", "databaseId")) %>%
+  arrange(dbOrder) %>%
+  select(subjects, dbOrder, comparatorSubjects, comparatorDays, comparatorOutcomes) %>%
+  mutate(cph_fqcph_matched_incidence = comparatorOutcomes/comparatorDays) %>%
+  rename(cph_fqcph_matched = subjects, cph_fqcph_matched_subjects_cm = comparatorSubjects, cph_fqcph_matched_days = comparatorDays, cph_fqcph_matched_outcome = comparatorOutcomes)
+
+
+dbTemp <- dbTidy %>%
+  select(cdmSourceAbbreviation, dbOrder)
+attritionIncidenceSummary <- dbTemp %>%
+  left_join(fq_fqtmp_orgin, by = "dbOrder")%>%
+  left_join(fq_fqtmp_matched, by = "dbOrder")%>%
+  left_join(tmp_fqtmp_orgin, by = "dbOrder")%>%
+  left_join(tmp_fqtmp_matched, by = "dbOrder")%>%
+  left_join(fq_fqcph_orgin, by = "dbOrder")%>%
+  left_join(fq_fqcph_matched, by = "dbOrder")%>%
+  left_join(cph_fqcph_orgin, by = "dbOrder")%>%
+  left_join(cph_fqcph_matched, by = "dbOrder")
+
+###negative values and incidence calculation are needed
+
+write.csv(attritionIncidenceSummary, file.path(resultFolder, "analysis", "attrition_incidence_summary.csv"))
+
 
 ####Balance table and plot####
 # sharedCovariateBalance <- sosPullTable(connection = connection,
@@ -582,7 +708,6 @@ for (i in seq(nrow(resultListForSurvival))){
 #####
 
 ####Diagnostics table####
-###############
 cmDiagnostics <- sosPullTable(connection = connection,
                               resultsSchema = resultsSchema,
                               targetTable = "cm_diagnostics_summary", #"cd_cohort"
@@ -791,6 +916,113 @@ gt_table_modified %>% gtsave(file.path(resultFolder, "diagnostics", sprintf("dia
 gt_table_modified %>% gtsave(file.path(resultFolder, "diagnostics", sprintf("diagnostics_table.pdf")))
 gt_table_modified %>% gtsave(file.path(resultFolder, "diagnostics", sprintf("diagnostics_table.docx")))
 
+
+####Diagnostics table (SCCS)####
+analysisSccs <- sosPullTable(connection = connection,
+                             resultsSchema = resultsSchema,
+                             targetTable = "sccs_analysis",
+                             limit = 0)
+analysisTidySccs <- analysisSccs
+analysisTidySccs$isPrimaryAnalysis <- 0
+analysisTidySccs$tar <- NA
+analysisTidySccs$nestingCohortId <- NA
+
+for(i in seq(nrow(analysisTidySccs))){
+  a <- jsonlite::fromJSON(analysisTidySccs$definition[i])
+  analysisTidySccs$tar[i] <- a$createIntervalDataArgs$eraCovariateSettings$end[2]
+  if(a$createIntervalDataArgs$eraCovariateSettings$end[2]==tarPrime) analysisTidySccs$isPrimaryAnalysis[i] <- 1
+  analysisTidySccs$nestingCohortId[i] <- a$getDbSccsDataArgs$nestingCohortId[1]
+}
+analysisTidySccs <- analysisTidySccs %>%
+  select(analysisId, description, tar, nestingCohortId, isPrimaryAnalysis)
+
+exposureSccs <- sosPullTable(connection = connection,
+                             resultsSchema = resultsSchema,
+                             targetTable = "sccs_exposure",
+                             limit = 0)
+
+exposureOutcomeSccs <- sosPullTable(connection = connection,
+                                    resultsSchema = resultsSchema,
+                                    targetTable = "sccs_exposures_outcome_set",
+                                    limit = 0)
+
+eraSccs <- sosPullTable(connection = connection,
+                        resultsSchema = resultsSchema,
+                        targetTable = "sccs_era",
+                        limit = 0)
+
+cohortDefinition$cohortDefinitionId
+cohortDefinition$cohortName
+str(cohortDefinition)
+eraTidy <- eraSccs %>% select(eraId, eraName, eraType) %>% unique ()
+
+exposureOutcome <- exposureOutcomeSccs %>%
+  left_join(exposureSccs, by = "exposuresOutcomeSetId") %>%
+  left_join(eraTidy, by = c("eraId"))
+exposureOutcome$exposureCohortId <- as.numeric(gsub("\\D","",exposureOutcome$eraName)) #extract numbers from string
+
+# add outcome names
+exposureOutcome <- tcoTidy %>%
+  select(outcomeId, isPrimaryTco, outcomeName) %>%
+  unique() %>%
+  right_join(exposureOutcome, by = "outcomeId")
+
+# add exposure names
+exposureOutcome <- cohortDefinition %>%
+  select(cohortDefinitionId, cohortName) %>%
+  right_join(exposureOutcome, by = c("cohortDefinitionId"="exposureCohortId")) %>%
+  rename(exposureName = cohortName, exposureCohortId = cohortDefinitionId)
+
+exposureOutcome <- exposureOutcome %>%
+  mutate(exposureAbbreviation = case_when(exposureName == "Fluoroquinolone systemic exposures with UTI" ~ "FQ",
+                                          exposureName == "Cephalosporin systemic exposures with UTI" ~ "CPH",
+                                          exposureName == "Trimethoprim systemic exposures with UTI" ~ "TMP"))
+
+exposureOutcomeTidy <- exposureOutcome
+#Assign colors to exposure
+# tcoTidy$targetColorR <- targetColorR
+# tcoTidy$targetColorG <- targetColorG
+# tcoTidy$targetColorB <- targetColorB
+# tcoTidy$comparatorColorR <- ifelse(tcoTidy$comparatorAbbreviation=="TMP", comparatorColorR1st, tcoTidy$tcOrder <- ifelse(tcoTidy$comparatorAbbreviation=="CPH", comparatorColorR2nd, NA))
+# tcoTidy$comparatorColorG <- ifelse(tcoTidy$comparatorAbbreviation=="TMP", comparatorColorG1st, tcoTidy$tcOrder <- ifelse(tcoTidy$comparatorAbbreviation=="CPH", comparatorColorG2nd, NA))
+# tcoTidy$comparatorColorB <- ifelse(tcoTidy$comparatorAbbreviation=="TMP", comparatorColorB1st, tcoTidy$tcOrder <- ifelse(tcoTidy$comparatorAbbreviation=="CPH", comparatorColorB2nd, NA))
+
+diagnosticsSccs <- sosPullTable(connection = connection,
+                                resultsSchema = resultsSchema,
+                                targetTable = "sccs_diagnostics_summary",
+                                limit = 0)
+diagnosticsSccsTidy <- diagnosticsSccs %>%
+  left_join(exposureOutcomeTidy, by = "exposuresOutcomeSetId")
+
+excludingDbs <- c("German DA(DE)", "LPD Begium(BE)", "LPD Italy(IT)")
+
+# sccsDiagnostics %>% str()
+diagSccs <- diagnosticsSccs %>%
+  left_join(dbTidy, by = "databaseId") %>%
+  left_join(analysisTidySccs,
+            by = "analysisId") %>%
+  left_join(exposureOutcomeTidy,
+            by = "exposuresOutcomeSetId") %>%
+  mutate(diagnostics = ifelse(unblind, "PASS", "FAIL")) %>%
+  filter(!(cdmSourceAbbreviation %in% excludingDbs))
+
+diagSccsFq <- diagSccs %>% filter(isPrimaryTco == 1) %>% filter(tar==60) %>%
+  filter(exposureAbbreviation == "FQ") %>%
+  arrange(dbOrder) %>%
+  select(exposureAbbreviation, cdmSourceAbbreviation, mdrr, timeTrendP, preExposureP, ease, mdrrDiagnostic, timeTrendDiagnostic,preExposureDiagnostic, easeDiagnostic, diagnostics)#13
+diagSccsTmp <- diagSccs %>% filter(isPrimaryTco == 1) %>% filter(tar==60) %>%
+  filter(exposureAbbreviation == "TMP") %>%
+  arrange(dbOrder) %>%
+  select(exposureAbbreviation, cdmSourceAbbreviation, mdrr, timeTrendP, preExposureP, ease, mdrrDiagnostic, timeTrendDiagnostic,preExposureDiagnostic, easeDiagnostic, diagnostics)#13
+diagSccsCph <- diagSccs %>% filter(isPrimaryTco == 1) %>% filter(tar==60) %>%
+  filter(exposureAbbreviation == "CPH") %>%
+  arrange(dbOrder) %>%
+  select(exposureAbbreviation, cdmSourceAbbreviation, mdrr, timeTrendP, preExposureP, ease, mdrrDiagnostic, timeTrendDiagnostic,preExposureDiagnostic, easeDiagnostic, diagnostics)#13
+
+diagSccsSummary <- rbind(diagSccsFq, diagSccsTmp, diagSccsCph)
+write.csv(diagSccsSummary, file.path(resultFolder, "diagnostics", "diagnostics_sccs.csv"))
+
+###############
 
 #################
 
@@ -1115,7 +1347,7 @@ for(i in seq(nrow(metaList))){
                               summary = rgb(comparatorColorR, comparatorColorG, comparatorColorB, alpha = 0.7),#"royalblue",
                               hrz_lines = "#444444"),
                title = sprintf("%s vs %s", targetName, comparatorName)
-               )
+    )
   # grid::grid.text(paste("Tau:", round(tau_val, 2)), x = unit(0.95, "npc"), y = unit(0.05, "npc"), just = c("left", "bottom")) #to add tau value
 
   if(!file.exists(file.path(resultFolder,"meta"))) dir.create(file.path(resultFolder,"meta"))
