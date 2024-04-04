@@ -261,12 +261,32 @@ resultList <- diagnosticsSummary %>%
 #                                  targetTable = "cg_cohort_definition", #"cd_cohort"
 #                                  limit = 0)
 #########################################
+####Databases####
+dbs <- sosPullTable(connection = connection,
+                    resultsSchema = resultsSchema,
+                    targetTable = "cd_database",
+                    limit = 0)
+
+dbMetadata <- sosPullTable(connection = connection,
+                   resultsSchema = resultsSchema,
+                   targetTable = "cd_metadata",
+                   limit = 0)
+
+# Transform the meta data (column to rows)
+dbMetadataTr <- dbMetadata %>%
+  select(-startTime) %>% # Remove the startTime column
+  pivot_wider(names_from = variableField, values_from = valueField)# Pivot the table
+#%>% group_by(databaseId) %>% summarise(across(everything(), ~first(na.omit(.))), .groups = 'drop') # Corrected summarise call
+
+write.csv(mtTr, file.path(resultFolder, "db_metadata.csv"))
+
 ####Negative control outcomes####
 analysisSpec <- jsonlite::fromJSON("./inst/analysisSpecification.json")
 negativeConOutcomes <- analysisSpec$sharedResources$negativeControlOutcomes$negativeControlOutcomeCohortSet[[2]][,c("outcomeConceptId", "cohortName")]
 
 if(!file.exists(file.path(resultFolder,"analysis"))) dir.create(file.path(resultFolder,"analysis"))
 write.csv(negativeConOutcomes, file.path(resultFolder, "analysis", "negative_control_list.csv"))
+
 
 #########################################
 ####Attrition Summary and Inicdence rate####
@@ -382,6 +402,9 @@ attritionIncidenceSummary <- dbTemp %>%
   left_join(fq_fqcph_matched, by = "dbOrder")%>%
   left_join(cph_fqcph_orgin, by = "dbOrder")%>%
   left_join(cph_fqcph_matched, by = "dbOrder")
+
+####Overall Incidence####
+
 
 ###negative values and incidence calculation are needed
 
@@ -707,7 +730,43 @@ for (i in seq(nrow(resultListForSurvival))){
 }
 #####
 
-####Diagnostics table####
+####Diagnostics table (CohortMethod)####
+cmDiagnostics <- sosPullTable(connection = connection,
+                              resultsSchema = resultsSchema,
+                              targetTable = "cm_diagnostics_summary", #"cd_cohort"
+                              limit = 0)
+excludingDbs <- c("German DA(DE)", "LPD Begium(BE)", "LPD Italy(IT)")
+
+diag <- cmDiagnostics %>%
+  mutate(diagnostics = ifelse(unblind, "PASS", "FAIL")) %>%
+  left_join(dbTidy, by = "databaseId") %>%
+  left_join(analysisTidy,
+            by = "analysisId") %>%
+  left_join(tcoTidy,
+            by = c("targetId", "comparatorId", "outcomeId"))
+
+diag$comparatorAbbreviation <- factor(diag$comparatorAbbreviation, c("TMP", "CPH"))
+
+diagPrime <- diag %>%
+  filter(isPrimaryAnalysis == 1) %>%
+  filter(isPrimaryTco == 1) %>%
+  filter(!(.data$cdmSourceAbbreviation %in% excludingDbs)) %>%
+  arrange(dbOrder) #%>% arrange(comparatorId)
+
+diagPrimeTmp <- diagPrime %>%
+  filter (comparatorAbbreviation == "TMP") %>%
+  select(cdmSourceAbbreviation, comparatorAbbreviation, balanceDiagnostic, equipoiseDiagnostic, easeDiagnostic, diagnostics)
+
+diagPrimeCph <- diagPrime %>%
+  filter (comparatorAbbreviation == "CPH") %>%
+  select(cdmSourceAbbreviation, comparatorAbbreviation, balanceDiagnostic, equipoiseDiagnostic, easeDiagnostic, diagnostics)
+
+write.csv(diagPrimeTmp, file.path(resultFolder, "diagnostics", "diagnostics_cm_tmp.csv"))
+write.csv(diagPrimeCph, file.path(resultFolder, "diagnostics", "diagnostics_cm_cph.csv"))
+
+#####
+
+####Diagnostics plot(CohortMethod)####
 cmDiagnostics <- sosPullTable(connection = connection,
                               resultsSchema = resultsSchema,
                               targetTable = "cm_diagnostics_summary", #"cd_cohort"
@@ -915,6 +974,8 @@ gt_table_modified %>% gtsave(file.path(resultFolder, "diagnostics", sprintf("dia
 gt_table_modified %>% gtsave(file.path(resultFolder, "diagnostics", sprintf("diagnostics_table.rtf")))
 gt_table_modified %>% gtsave(file.path(resultFolder, "diagnostics", sprintf("diagnostics_table.pdf")))
 gt_table_modified %>% gtsave(file.path(resultFolder, "diagnostics", sprintf("diagnostics_table.docx")))
+####
+
 
 
 ####Diagnostics table (SCCS)####
@@ -951,9 +1012,6 @@ eraSccs <- sosPullTable(connection = connection,
                         targetTable = "sccs_era",
                         limit = 0)
 
-cohortDefinition$cohortDefinitionId
-cohortDefinition$cohortName
-str(cohortDefinition)
 eraTidy <- eraSccs %>% select(eraId, eraName, eraType) %>% unique ()
 
 exposureOutcome <- exposureOutcomeSccs %>%
