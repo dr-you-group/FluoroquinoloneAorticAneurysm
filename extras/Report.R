@@ -121,7 +121,6 @@ esTableNames <- resultTables %>%
   filter(grepl("^es",tableName)) %>%
   pull(tableName)
 
-############################
 ####Tidy TCO, Analysis, DB list####
 
 # Cohort Definition
@@ -169,7 +168,7 @@ tcoTidy <- tco %>% inner_join(cohortTidy,
              by = c("outcomeId" = "cohortDefinitionId")) %>%
   rename(outcomeName = cohortName, outcomeAbbreviation = cohortNameAbbreviation)
 
-#Assin colors to target and comparator
+#Assign colors to target and comparator
 tcoTidy$targetColorR <- targetColorR
 tcoTidy$targetColorG <- targetColorG
 tcoTidy$targetColorB <- targetColorB
@@ -196,13 +195,13 @@ dbTidy$cdmSourceAbbreviation[grep("Japan Medical Data Center",dbTidy$cdmSourceNa
 dbTidy$cdmSourceAbbreviation[grep("IBM.*Multi-State Medicaid Database",dbTidy$cdmSourceName)] <- "IBM MDCD(US)"
 dbTidy$cdmSourceAbbreviation[grep("AJOUMC",dbTidy$cdmSourceName)] <- "AUSOM(KR)"
 dbTidy$cdmSourceAbbreviation[grep("National Health Insurance Service.*National Sample Cohort",dbTidy$cdmSourceName)] <- "NHIS-NSC(KR)"
-dbTidy$cdmSourceAbbreviation[grep("Optum.*Clinformatics.*Extended Data Mart.*DOD",dbTidy$cdmSourceName)] <- "Optum DOD(US)"
+dbTidy$cdmSourceAbbreviation[grep("Optum.*Clinformatics.*Extended Data Mart.*DOD",dbTidy$cdmSourceName)] <- "Clinformatics(US)"
 dbTidy$cdmSourceAbbreviation[grep("Optum EHR",dbTidy$cdmSourceName)] <- "Optum EHR(US)"
 dbTidy$cdmSourceAbbreviation[grep("PharMetrics",dbTidy$cdmSourceName)] <- "PharMetrics(US)"
-dbTidy$cdmSourceAbbreviation[grep("Taipei Medical University",dbTidy$cdmSourceName)] <- "TMUDB(TW)"
+dbTidy$cdmSourceAbbreviation[grep("Taipei Medical University",dbTidy$cdmSourceName)] <- "TMUCRD(TW)"
 dbTidy$cdmSourceAbbreviation[grep("Veterans Affairs",dbTidy$cdmSourceName)] <- "VA(US)"
 dbTidy$cdmSourceAbbreviation[grep("CUMC",dbTidy$cdmSourceName)] <- "CUIMC(US)"
-dbTidy$cdmSourceAbbreviation[grep("SevCDM",dbTidy$cdmSourceName)] <- "Yonsei(KR)"
+dbTidy$cdmSourceAbbreviation[grep("SevCDM",dbTidy$cdmSourceName)] <- "YUHS(KR)"
 dbTidy$cdmSourceAbbreviation[grep("LPD.*Italy",dbTidy$cdmSourceName)] <- "LPD Italy(IT)"
 dbTidy$cdmSourceAbbreviation[grep("LPD.*Belgium",dbTidy$cdmSourceName)] <- "LPD Begium(BE)"
 dbTidy$cdmSourceAbbreviation[grep("LPD.*Australia",dbTidy$cdmSourceName)] <- "LPD Australia(AU)"
@@ -260,35 +259,65 @@ resultList <- diagnosticsSummary %>%
 #                                  resultsSchema = resultsSchema,
 #                                  targetTable = "cg_cohort_definition", #"cd_cohort"
 #                                  limit = 0)
-#########################################
+
 ####Databases####
 dbs <- sosPullTable(connection = connection,
                     resultsSchema = resultsSchema,
                     targetTable = "cd_database",
                     limit = 0)
 
-dbMetadata <- sosPullTable(connection = connection,
-                   resultsSchema = resultsSchema,
-                   targetTable = "cd_metadata",
-                   limit = 0)
+dbMeta <- sosPullTable(connection = connection,
+                       resultsSchema = resultsSchema,
+                       targetTable = "cd_metadata",
+                       limit = 0)
+
+databaseMetaData <- sosPullTable(connection = connection,
+                                 resultsSchema = resultsSchema,
+                                 targetTable = "database_meta_data",
+                                 limit = 0)
 
 # Transform the meta data (column to rows)
-dbMetadataTr <- dbMetadata %>%
+dbMetaTr <- dbMeta %>%
   select(-startTime) %>% # Remove the startTime column
   pivot_wider(names_from = variableField, values_from = valueField)# Pivot the table
 #%>% group_by(databaseId) %>% summarise(across(everything(), ~first(na.omit(.))), .groups = 'drop') # Corrected summarise call
-
-write.csv(mtTr, file.path(resultFolder, "db_metadata.csv"))
+write.csv(dbMetaTr, file.path(resultFolder, "db_metadata_tr.csv"))
+write.csv(databaseMetaData, file.path(resultFolder, "db_metadata.csv"))
 
 ####Negative control outcomes####
+# List of negative control outcomes
 analysisSpec <- jsonlite::fromJSON("./inst/analysisSpecification.json")
 negativeConOutcomes <- analysisSpec$sharedResources$negativeControlOutcomes$negativeControlOutcomeCohortSet[[2]][,c("outcomeConceptId", "cohortName")]
 
 if(!file.exists(file.path(resultFolder,"analysis"))) dir.create(file.path(resultFolder,"analysis"))
 write.csv(negativeConOutcomes, file.path(resultFolder, "analysis", "negative_control_list.csv"))
 
+result <- sosPullTable(connection = connection,
+                       resultsSchema = resultsSchema,
+                       targetTable = "cm_result",
+                       limit = 0)
+controlResults <- result %>%
+  filter(targetId %in% tcoTidy$targetId) %>%
+  filter(comparatorId %in% tcoTidy$comparatorId) %>%
+  filter(analysisId %in% analysisIdPrime) %>%
+  filter(!is.na(p)) %>% #remove NA values
+  filter(outcomeId %in% 1001:1050) #negative control outcome Ids starts from 1001 to 2050
 
-#########################################
+compTemp <- tcoTidy %>% select(comparatorId, comparatorAbbreviation) %>% unique()
+
+controlResultsPerDb <- controlResults %>%
+  group_by(targetId, comparatorId, databaseId) %>% summarise(n=n()) %>%
+  merge(dbTidy) %>%
+  merge(compTemp)
+write.csv(controlResultsPerDb, file.path(resultFolder, "systematic_error", "control_results_per_db.csv"))
+
+####PS Model####
+# psModel <- sosPullTable(connection = connection,
+#                         resultsSchema = resultsSchema,
+#                         targetTable = "cm_propensity_model",
+#                         limit = 0)
+
+
 ####Attrition Summary and Inicdence rate####
 cmAttrition <- sosPullTable(connection = connection,
                             resultsSchema = resultsSchema,
@@ -403,12 +432,11 @@ attritionIncidenceSummary <- dbTemp %>%
   left_join(cph_fqcph_orgin, by = "dbOrder")%>%
   left_join(cph_fqcph_matched, by = "dbOrder")
 
-####Overall Incidence####
-
-
 ###negative values and incidence calculation are needed
 
 write.csv(attritionIncidenceSummary, file.path(resultFolder, "analysis", "attrition_incidence_summary.csv"))
+
+
 
 
 ####Balance table and plot####
@@ -424,6 +452,7 @@ covariate <- sosPullTable(connection = connection,
                           resultsSchema = resultsSchema,
                           targetTable = "cm_covariate",
                           limit = 0)
+
 # returnCamelDf (targetTable = "cm_shared_covariate_balance",
 #                andromedaObject = cmResultSuite)
 # returnCamelDf (targetTable = "cm_covariate_balance",
@@ -435,6 +464,35 @@ resultListForBalance <- resultList %>%
   filter(isPrimaryTco == 1)
 
 #Balance table
+for(i in seq(nrow(resultListForBalance))){
+  if(!resultListForBalance$isPrimaryAnalysis[i]) next #Only plot PS distribution for primary analysis #redundant#
+
+  databaseId <- resultListForBalance[i,]$databaseId
+  targetId <- resultListForBalance[i,]$targetId
+  comparatorId <- resultListForBalance[i,]$comparatorId
+  analysisId <- resultListForBalance[i,]$analysisId
+  outcomeId = resultListForBalance$outcomeId[i]
+  comparatorColorR <- resultListForBalance[i,]$comparatorColorR
+  comparatorColorG <- resultListForBalance[i,]$comparatorColorG
+  comparatorColorB <- resultListForBalance[i,]$comparatorColorB
+  targetName <- resultListForBalance[i,]$targetAbbreviation
+  comparatorName <- resultListForBalance[i,]$comparatorAbbreviation
+  cdmSourceAbbreviation <- resultListForBalance[i,]$cdmSourceAbbreviation
+
+  balanceTemp <- covariateBalance %>% filter(databaseId == !!databaseId,
+                                             targetId == !!targetId,
+                                             comparatorId == !!comparatorId,
+                                             outcomeId == !!outcomeId,
+                                             analysisId == !!analysisId)
+  covariateTemp <- covariate %>%
+    filter(databaseId == !!databaseId,
+           analysisId == !!analysisId) %>%
+    select(covariateId, covariateAnalysisId, covariateName)
+  balance <- merge(balanceTemp, covariateTemp)
+  print(nrow(balance))
+}
+
+
 for(i in seq(nrow(resultListForBalance))){
   if(!resultListForBalance$isPrimaryAnalysis[i]) next #Only plot PS distribution for primary analysis #redundant#
 
@@ -542,6 +600,40 @@ for(i in seq(nrow(resultListForBalance))){
 
   rm(balance)
 }
+
+#Identify number of covariates in each analysis
+sharedCovariateBal <- sosPullTable(connection = connection,
+                          resultsSchema = resultsSchema,
+                          targetTable = "cm_shared_covariate_balance",
+                          limit = 0)
+
+sharedBalanceTable <- data.frame()
+for(i in seq(nrow(resultListForBalance))){
+  databaseId <- resultListForBalance[i,]$databaseId
+  targetId <- resultListForBalance[i,]$targetId
+  comparatorId <- resultListForBalance[i,]$comparatorId
+  analysisId <- resultListForBalance[i,]$analysisId
+  targetName <- resultListForBalance[i,]$targetAbbreviation
+  comparatorName <- resultListForBalance[i,]$comparatorAbbreviation
+  cdmSourceAbbreviation <- resultListForBalance[i,]$cdmSourceAbbreviation
+
+  sharedBalanceTemp <- sharedCovariateBal %>% filter(databaseId == !!databaseId,
+                                             targetId == !!targetId,
+                                             comparatorId == !!comparatorId,
+                                             analysisId == !!analysisId)
+
+  sharedBalanceTableTemp <- data.frame(cdmSourceAbbreviation = cdmSourceAbbreviation,
+                                    targetName = targetName,
+                                    comparatorName = comparatorName,
+                                    covariateNumber = nrow(sharedBalanceTemp),
+                                    maxAbsStdDiffBefore = max(abs(sharedBalanceTemp$stdDiffBefore)),
+                                    maxAbsStdDiffAfter = max(abs(sharedBalanceTemp$stdDiffAfter))
+                                    )
+
+  sharedBalanceTable <- rbind(sharedBalanceTable, sharedBalanceTableTemp)
+}
+write.csv(sharedBalanceTable, file.path(resultFolder, "shared_balance_table.csv"))
+
 #####
 
 ####Distribution of Preference score####
@@ -607,6 +699,241 @@ for(i in seq(nrow(tcdList))){
   )
 }
 #####
+####Comparative PS overlap plot grid####
+preferenceScoreDist <- sosPullTable(connection = connection,
+                                    resultsSchema = resultsSchema,
+                                    targetTable = "cm_preference_score_dist",
+                                    limit = 0)
+
+tcdList <- resultList %>% select(analysisId, targetId, comparatorId, databaseId,
+                                 equipoise, equipoiseDiagnostic, # unblind,
+                                 cdmSourceName, cdmSourceAbbreviation,
+                                 descriptionAnalysis, isPrimaryAnalysis,
+                                 targetName, targetAbbreviation,
+                                 comparatorName, comparatorAbbreviation,
+                                 # targetColorR, targetColorG, targetColorB,
+                                 comparatorColorR, comparatorColorG, comparatorColorB) %>%
+  unique()
+
+####plot PS for Grid####
+plotPsForGrid <- function(ps,
+                          targetName,
+                          comparatorName,
+                          targetColor,
+                          comparatorColor,
+                          showEquiposeLabel = TRUE,
+                          equipoiseBounds = c(0.3,0.7),
+                          fileName = NULL,
+                          targetColorR = 0.8,
+                          targetColorG = 0,
+                          targetColorB = 0,
+                          comparatorColorR = 0,
+                          comparatorColorG = 0,
+                          comparatorColorB = 0.8) {
+  psOrigin <- ps
+  ps <- rbind(data.frame(x = ps$preferenceScore, y = ps$targetDensity, group = targetName),
+              data.frame(x = ps$preferenceScore, y = ps$comparatorDensity, group = comparatorName))
+  ps$group <- factor(ps$group, levels = c(as.character(targetName), as.character(comparatorName)))
+  theme <- ggplot2::element_text(colour = "#000000", size = 12, margin = ggplot2::margin(0, 0.5, 0, 0.1, "cm"))
+  plot <- ggplot2::ggplot(ps,
+                          ggplot2::aes(x = x, y = y, color = group, group = group, fill = group)) +
+    ggplot2::geom_density(stat = "identity") +
+    # ggplot2::scale_fill_manual(values = c(rgb(0.8, 0, 0, alpha = 0.5),
+    #                                       rgb(0, 0, 0.8, alpha = 0.5))) +
+    # ggplot2::scale_color_manual(values = c(rgb(0.8, 0, 0, alpha = 0.5),
+    #                                        rgb(0, 0, 0.8, alpha = 0.5))) +
+    ggplot2::scale_fill_manual(values = c(rgb(targetColorR, targetColorG, targetColorB, alpha = 0.5),
+                                          rgb(comparatorColorR, comparatorColorG, comparatorColorB, alpha = 0.5))) +
+    ggplot2::scale_color_manual(values = c(rgb(targetColorR, targetColorG, targetColorB, alpha = 0.5),
+                                           rgb(comparatorColorR, comparatorColorG, comparatorColorB, alpha = 0.5))) +
+    ggplot2::scale_x_continuous("Preference score", limits = c(0, 1)) +
+    ggplot2::scale_y_continuous("Density", breaks = seq(0, ceiling(max(ps$y)), by = 1)) + #Set the y-axis tick marks to appropriate intervals of integers.
+    ggplot2::theme(legend.title = ggplot2::element_blank(),
+                   panel.grid.major = ggplot2::element_blank(),
+                   panel.grid.minor = ggplot2::element_blank(),
+                   legend.position = "top",
+                   legend.text = theme,
+                   axis.text = theme,
+                   axis.title = theme)
+  if (showEquiposeLabel) {
+    labelsLeft <- c()
+    labelsRight <- c()
+    if (showEquiposeLabel) {
+      equiIndex <- psOrigin$preferenceScore>=equipoiseBounds[1] & psOrigin$preferenceScore<=equipoiseBounds[2]
+      equipoise <- mean (sum(psOrigin$targetDensity[equiIndex]), sum(psOrigin$comparatorDensity[equiIndex]))/100
+      labelsRight <- c(labelsRight, sprintf("%2.1f%% is in equipoise",
+                                            equipoise * 100))
+    }
+    if (length(labelsLeft) > 0) {
+      dummy <- data.frame(text = paste(labelsLeft, collapse = "\n"))
+      plot <- plot + ggplot2::geom_label(x = 0, #y = max(d$y) * 1.24,
+                                         hjust = "left", vjust = "top", alpha = 0.8,
+                                         ggplot2::aes(label = text), data = dummy, size = 3.5)
+    }
+    if (length(labelsRight) > 0) {
+      dummy <- data.frame(text = paste(labelsRight, collapse = "\n"))
+      plot <- plot + ggplot2::annotate("label", x = 1, y = max(ps$y) * 1,
+                                       hjust = "right", vjust = "top",
+                                       alpha = 0.8,
+                                       label = labelsRight,
+                                       #ggplot2::aes(label = labelsRight),
+                                       #ggplot2::aes(label = text), data = dummy,
+                                       size = 3.5)
+      # plot <- plot + ggplot2::geom_label(x = 1, y = max(ps$y) * 1.24,
+      #                                    hjust = "right", vjust = "top",
+      #                                    alpha = 0.8,
+      #                                    ggplot2::aes(label = labelsRight),
+      #                                    ggplot2::aes(label = text), data = dummy,
+      #                                    size = 3.5)
+    }
+  }
+  if (!is.null(fileName))
+    ggplot2::ggsave(fileName, plot, width = 5, height = 3.5,
+                    dpi = 400)
+  return(plot)
+}
+######
+excludingDbs <- c("German DA(DE)", "LPD Begium(BE)", "LPD Italy(IT)")
+tcdListPrimary <- tcdList %>%
+  filter(isPrimaryAnalysis==1) %>%
+  filter(!cdmSourceAbbreviation %in% excludingDbs)
+dbOrder <- dbTidy %>% select(country, cdmSourceAbbreviation, dbOrder)
+tcdListPrimaryOrder <- tcdListPrimary %>%
+  left_join(dbOrder, by = c("cdmSourceAbbreviation"))
+
+tcdListPrimaryOrder$dbOrder <- tcdListPrimaryOrder$dbOrder*2 - (tcdListPrimaryOrder$comparatorAbbreviation=="TMP")
+length(unique(tcdListPrimaryOrder$dbOrder)) == length(tcdListPrimaryOrder$dbOrder)
+
+# psYMax <- 6
+#For US
+startNum = 1
+endNum = 14
+for(i in startNum:endNum){
+
+  if (i==startNum) psPlotList <- list()
+
+  databaseId <- tcdListPrimaryOrder%>% filter(dbOrder==i) %>% select(databaseId) %>% as.character()
+  targetId <- tcdListPrimaryOrder%>% filter(dbOrder==i) %>% select(targetId) %>% as.numeric()
+  comparatorId <- tcdListPrimaryOrder%>% filter(dbOrder==i) %>% select(comparatorId) %>% as.numeric()
+  analysisId <- tcdListPrimaryOrder%>% filter(dbOrder==i) %>% select(analysisId) %>% as.numeric()
+  comparatorColorR <- tcdListPrimaryOrder%>% filter(dbOrder==i) %>% select(comparatorColorR) %>% as.numeric()
+  comparatorColorG <- tcdListPrimaryOrder%>% filter(dbOrder==i) %>% select(comparatorColorG) %>% as.numeric()
+  comparatorColorB <- tcdListPrimaryOrder%>% filter(dbOrder==i) %>% select(comparatorColorB) %>% as.numeric()
+
+  targetName <- tcdListPrimaryOrder%>% filter(dbOrder==i) %>% select(targetAbbreviation)%>% as.character()
+  comparatorName <- tcdListPrimaryOrder%>% filter(dbOrder==i) %>% select(comparatorAbbreviation)%>% as.character()
+  cdmSourceAbbreviation <- tcdListPrimaryOrder%>% filter(dbOrder==i) %>% select(cdmSourceAbbreviation)%>% as.character()
+
+  ps = preferenceScoreDist %>% filter(databaseId == !!databaseId,
+                                      targetId == !!targetId,
+                                      comparatorId == !!comparatorId,
+                                      analysisId == !!analysisId)
+
+  if(nrow(ps)==0) next
+
+  # tcdPsDf <- rbind(tcdPsDf,tcdList[i,])
+
+  # if(!file.exists(file.path(resultFolder,"ps"))) dir.create(file.path(resultFolder,"ps"))
+  psPlot <- plotPsForGrid(ps,
+                          targetName= targetName,
+                          comparatorName = comparatorName,
+                          showEquiposeLabel = TRUE,
+                          equipoiseBounds = equipoiseBounds,
+                          targetColorR = targetColorR,
+                          targetColorG = targetColorG,
+                          targetColorB = targetColorB,
+                          comparatorColorR = comparatorColorR,
+                          comparatorColorG = comparatorColorG,
+                          comparatorColorB = comparatorColorB
+  )
+
+  psPlot <- psPlot + ggtitle(sprintf("%s vs %s in %s", targetName, comparatorName, cdmSourceAbbreviation))#sprintf("%s vs %s in %s", targetName, comparatorName, dbName)
+  psPlot <- psPlot + theme(legend.position="none") #remove legend
+
+  if (!(i %in% c(endNum-1,endNum))){
+    psPlot <- psPlot + theme(axis.title.x=element_blank()) #remove x-axis title
+  }
+
+  #remove y axis
+  if( (i %% 2) ==0){
+    psPlot <- psPlot + theme(axis.title.y=element_blank(),
+                             # axis.ticks.y=element_blank(),
+                             # axis.text.y=element_blank()
+    )
+  }
+  # psPlot <- psPlot + ylim(0, psYMax) # Ensure uniform y scale
+
+  psPlotList[[length(psPlotList) + 1]] <- psPlot
+}
+# Arrange plots into a grid
+psPlotsGrid <- do.call(grid.arrange, c(psPlotList, ncol = 2, nrow = 7))
+ggsave(file.path(resultFolder,"ps","combined_plot_US.pdf"), psPlotsGrid, width = 8, height = 14)
+
+#For non-US
+startNum = 15
+endNum = 28
+for(i in startNum:endNum){
+
+  if (i==startNum) psPlotList <- list()
+
+  databaseId <- tcdListPrimaryOrder%>% filter(dbOrder==i) %>% select(databaseId) %>% as.character()
+  targetId <- tcdListPrimaryOrder%>% filter(dbOrder==i) %>% select(targetId) %>% as.numeric()
+  comparatorId <- tcdListPrimaryOrder%>% filter(dbOrder==i) %>% select(comparatorId) %>% as.numeric()
+  analysisId <- tcdListPrimaryOrder%>% filter(dbOrder==i) %>% select(analysisId) %>% as.numeric()
+  comparatorColorR <- tcdListPrimaryOrder%>% filter(dbOrder==i) %>% select(comparatorColorR) %>% as.numeric()
+  comparatorColorG <- tcdListPrimaryOrder%>% filter(dbOrder==i) %>% select(comparatorColorG) %>% as.numeric()
+  comparatorColorB <- tcdListPrimaryOrder%>% filter(dbOrder==i) %>% select(comparatorColorB) %>% as.numeric()
+
+  targetName <- tcdListPrimaryOrder%>% filter(dbOrder==i) %>% select(targetAbbreviation)%>% as.character()
+  comparatorName <- tcdListPrimaryOrder%>% filter(dbOrder==i) %>% select(comparatorAbbreviation)%>% as.character()
+  cdmSourceAbbreviation <- tcdListPrimaryOrder%>% filter(dbOrder==i) %>% select(cdmSourceAbbreviation)%>% as.character()
+
+  ps = preferenceScoreDist %>% filter(databaseId == !!databaseId,
+                                      targetId == !!targetId,
+                                      comparatorId == !!comparatorId,
+                                      analysisId == !!analysisId)
+
+  if(nrow(ps)==0) next
+
+  # tcdPsDf <- rbind(tcdPsDf,tcdList[i,])
+
+  # if(!file.exists(file.path(resultFolder,"ps"))) dir.create(file.path(resultFolder,"ps"))
+  psPlot <- plotPsForGrid(ps,
+                          targetName= targetName,
+                          comparatorName = comparatorName,
+                          showEquiposeLabel = TRUE,
+                          equipoiseBounds = equipoiseBounds,
+                          targetColorR = targetColorR,
+                          targetColorG = targetColorG,
+                          targetColorB = targetColorB,
+                          comparatorColorR = comparatorColorR,
+                          comparatorColorG = comparatorColorG,
+                          comparatorColorB = comparatorColorB
+  )
+
+  psPlot <- psPlot + ggtitle(sprintf("%s vs %s in %s", targetName, comparatorName, cdmSourceAbbreviation))#sprintf("%s vs %s in %s", targetName, comparatorName, dbName)
+  psPlot <- psPlot + theme(legend.position="none") #remove legend
+
+  if (!(i %in% c(endNum-1,endNum))){
+    psPlot <- psPlot + theme(axis.title.x=element_blank()) #remove x-axis title
+  }
+
+  #remove y axis
+  if( (i %% 2) ==0){
+    psPlot <- psPlot + theme(axis.title.y=element_blank(),
+                             # axis.ticks.y=element_blank(),
+                             # axis.text.y=element_blank()
+    )
+  }
+  # psPlot <- psPlot + ylim(0, psYMax) # Ensure uniform y scale
+
+  psPlotList[[length(psPlotList) + 1]] <- psPlot
+}
+# Arrange plots into a grid
+psPlotsGrid <- do.call(grid.arrange, c(psPlotList, ncol = 2, nrow = 7))
+ggsave(file.path(resultFolder,"ps","combined_plot_nonUS.pdf"), psPlotsGrid, width = 8, height = 14)
+#####
+
 
 ####Survival analysis####
 kaplanMeierDist <- sosPullTable(connection = connection,
@@ -754,12 +1081,10 @@ diagPrime <- diag %>%
   arrange(dbOrder) #%>% arrange(comparatorId)
 
 diagPrimeTmp <- diagPrime %>%
-  filter (comparatorAbbreviation == "TMP") %>%
-  select(cdmSourceAbbreviation, comparatorAbbreviation, balanceDiagnostic, equipoiseDiagnostic, easeDiagnostic, diagnostics)
+  filter (comparatorAbbreviation == "TMP") #%>% select(cdmSourceAbbreviation, comparatorAbbreviation, balanceDiagnostic, equipoiseDiagnostic, easeDiagnostic, diagnostics)
 
 diagPrimeCph <- diagPrime %>%
-  filter (comparatorAbbreviation == "CPH") %>%
-  select(cdmSourceAbbreviation, comparatorAbbreviation, balanceDiagnostic, equipoiseDiagnostic, easeDiagnostic, diagnostics)
+  filter (comparatorAbbreviation == "CPH") #%>% select(cdmSourceAbbreviation, comparatorAbbreviation, balanceDiagnostic, equipoiseDiagnostic, easeDiagnostic, diagnostics)
 
 write.csv(diagPrimeTmp, file.path(resultFolder, "diagnostics", "diagnostics_cm_tmp.csv"))
 write.csv(diagPrimeCph, file.path(resultFolder, "diagnostics", "diagnostics_cm_cph.csv"))
